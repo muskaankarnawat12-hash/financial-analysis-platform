@@ -97,3 +97,327 @@ def create_excel_model(
 
     output.seek(0)
     return output.getvalue()
+def create_pdf_report(
+    company_name: str,
+    ticker: str,
+    scenario: str,
+    currency: str,
+    units: str,
+    forecast: pd.DataFrame,
+    valuation: dict,
+    red_flags: list[str],
+    commentary: str = "",
+) -> bytes:
+    """Create a professional PDF investment report."""
+
+    from reportlab.lib import colors
+    from reportlab.lib.enums import TA_CENTER
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+    from reportlab.lib.units import mm
+    from reportlab.platypus import (
+        PageBreak,
+        Paragraph,
+        SimpleDocTemplate,
+        Spacer,
+        Table,
+        TableStyle,
+    )
+
+    output = BytesIO()
+
+    document = SimpleDocTemplate(
+        output,
+        pagesize=A4,
+        rightMargin=18 * mm,
+        leftMargin=18 * mm,
+        topMargin=16 * mm,
+        bottomMargin=16 * mm,
+        title=f"{company_name} Financial Analysis",
+    )
+
+    styles = getSampleStyleSheet()
+
+    title_style = ParagraphStyle(
+        "ReportTitle",
+        parent=styles["Title"],
+        fontSize=20,
+        leading=24,
+        textColor=colors.HexColor("#1F4E78"),
+        alignment=TA_CENTER,
+        spaceAfter=10,
+    )
+
+    heading_style = ParagraphStyle(
+        "ReportHeading",
+        parent=styles["Heading2"],
+        fontSize=13,
+        leading=16,
+        textColor=colors.HexColor("#1F4E78"),
+        spaceBefore=10,
+        spaceAfter=6,
+    )
+
+    body_style = ParagraphStyle(
+        "ReportBody",
+        parent=styles["BodyText"],
+        fontSize=9,
+        leading=13,
+        spaceAfter=5,
+    )
+
+    story = []
+
+    story.append(
+        Paragraph(
+            f"{company_name} Financial Analysis",
+            title_style,
+        )
+    )
+
+    story.append(
+        Paragraph(
+            f"Ticker: {ticker} | Scenario: {scenario} | "
+            f"Currency: {currency} {units}",
+            body_style,
+        )
+    )
+
+    story.append(Spacer(1, 8))
+
+    latest = forecast.iloc[-1]
+
+    summary_data = [
+        ["Metric", "Value"],
+        [
+            "Final-year revenue",
+            f"{latest['Revenue']:,.2f}",
+        ],
+        [
+            "Final-year EBITDA",
+            f"{latest['EBITDA']:,.2f}",
+        ],
+        [
+            "EBITDA margin",
+            f"{latest['EBITDA Margin']:.1%}",
+        ],
+        [
+            "Final-year free cash flow",
+            f"{latest['Free Cash Flow']:,.2f}",
+        ],
+        [
+            "Enterprise value",
+            f"{valuation['Enterprise Value']:,.2f}",
+        ],
+        [
+            "Equity value",
+            f"{valuation['Equity Value']:,.2f}",
+        ],
+        [
+            "Implied value per share",
+            f"{valuation['Implied Value Per Share']:,.2f}",
+        ],
+    ]
+
+    summary_table = Table(
+        summary_data,
+        colWidths=[85 * mm, 70 * mm],
+        repeatRows=1,
+    )
+
+    summary_table.setStyle(
+        TableStyle(
+            [
+                (
+                    "BACKGROUND",
+                    (0, 0),
+                    (-1, 0),
+                    colors.HexColor("#1F4E78"),
+                ),
+                (
+                    "TEXTCOLOR",
+                    (0, 0),
+                    (-1, 0),
+                    colors.white,
+                ),
+                (
+                    "FONTNAME",
+                    (0, 0),
+                    (-1, 0),
+                    "Helvetica-Bold",
+                ),
+                (
+                    "GRID",
+                    (0, 0),
+                    (-1, -1),
+                    0.5,
+                    colors.HexColor("#B8C2CC"),
+                ),
+                (
+                    "BACKGROUND",
+                    (0, 1),
+                    (-1, -1),
+                    colors.HexColor("#F4F7FA"),
+                ),
+                (
+                    "FONTSIZE",
+                    (0, 0),
+                    (-1, -1),
+                    8,
+                ),
+                (
+                    "VALIGN",
+                    (0, 0),
+                    (-1, -1),
+                    "MIDDLE",
+                ),
+                (
+                    "PADDING",
+                    (0, 0),
+                    (-1, -1),
+                    6,
+                ),
+            ]
+        )
+    )
+
+    story.append(Paragraph("Executive summary", heading_style))
+    story.append(summary_table)
+
+    story.append(Paragraph("Financial forecast", heading_style))
+
+    forecast_data = [
+        [
+            "Year",
+            "Revenue",
+            "EBITDA",
+            "EBIT",
+            "Free Cash Flow",
+        ]
+    ]
+
+    for _, row in forecast.iterrows():
+        forecast_data.append(
+            [
+                str(int(row["Year"])),
+                f"{row['Revenue']:,.1f}",
+                f"{row['EBITDA']:,.1f}",
+                f"{row['EBIT']:,.1f}",
+                f"{row['Free Cash Flow']:,.1f}",
+            ]
+        )
+
+    forecast_table = Table(
+        forecast_data,
+        colWidths=[
+            22 * mm,
+            34 * mm,
+            34 * mm,
+            34 * mm,
+            34 * mm,
+        ],
+        repeatRows=1,
+    )
+
+    forecast_table.setStyle(
+        TableStyle(
+            [
+                (
+                    "BACKGROUND",
+                    (0, 0),
+                    (-1, 0),
+                    colors.HexColor("#4472C4"),
+                ),
+                (
+                    "TEXTCOLOR",
+                    (0, 0),
+                    (-1, 0),
+                    colors.white,
+                ),
+                (
+                    "FONTNAME",
+                    (0, 0),
+                    (-1, 0),
+                    "Helvetica-Bold",
+                ),
+                (
+                    "GRID",
+                    (0, 0),
+                    (-1, -1),
+                    0.5,
+                    colors.HexColor("#B8C2CC"),
+                ),
+                (
+                    "FONTSIZE",
+                    (0, 0),
+                    (-1, -1),
+                    7.5,
+                ),
+                (
+                    "ALIGN",
+                    (1, 1),
+                    (-1, -1),
+                    "RIGHT",
+                ),
+                (
+                    "PADDING",
+                    (0, 0),
+                    (-1, -1),
+                    5,
+                ),
+            ]
+        )
+    )
+
+    story.append(forecast_table)
+
+    story.append(Paragraph("Financial red flags", heading_style))
+
+    for flag in red_flags:
+        story.append(
+            Paragraph(
+                f"• {flag}",
+                body_style,
+            )
+        )
+
+    if commentary:
+        story.append(PageBreak())
+        story.append(
+            Paragraph(
+                "Automated investment commentary",
+                heading_style,
+            )
+        )
+
+        clean_commentary = (
+            commentary
+            .replace("##", "")
+            .replace("**", "")
+        )
+
+        for paragraph in clean_commentary.split("\n"):
+            if paragraph.strip():
+                story.append(
+                    Paragraph(
+                        paragraph.strip(),
+                        body_style,
+                    )
+                )
+
+    story.append(Spacer(1, 12))
+
+    story.append(
+        Paragraph(
+            "Disclaimer: This report is for analytical and educational "
+            "purposes and does not constitute investment advice. "
+            "Public financial data should be verified against original "
+            "regulatory filings.",
+            body_style,
+        )
+    )
+
+    document.build(story)
+
+    output.seek(0)
+    return output.getvalue()

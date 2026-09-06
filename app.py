@@ -6,7 +6,7 @@ import streamlit as st
 
 from ai_analysis import generate_rule_based_analysis
 from data_sources import get_company_data
-from exports import create_excel_model
+from exports import create_excel_model, create_pdf_report
 from financial_model import (
     calculate_dcf,
     create_sensitivity_table,
@@ -759,7 +759,41 @@ if st.session_state.get("investment_commentary"):
     st.markdown(
         st.session_state["investment_commentary"]
     )
+st.subheader("PDF investment report")
 
+if "valuation" in locals():
+    pdf_file = create_pdf_report(
+        company_name=company_name,
+        ticker=ticker,
+        scenario=scenario,
+        currency=currency,
+        units=units,
+        forecast=forecast,
+        valuation=valuation,
+        red_flags=red_flags,
+        commentary=st.session_state.get(
+            "investment_commentary",
+            "",
+        ),
+    )
+
+    safe_pdf_name = (
+        company_name.lower()
+        .replace(" ", "_")
+        .replace(".", "")
+    )
+
+    st.download_button(
+        label="Download PDF investment report",
+        data=pdf_file,
+        file_name=f"{safe_pdf_name}_investment_report.pdf",
+        mime="application/pdf",
+        type="primary",
+    )
+else:
+    st.info(
+        "Enter valid valuation assumptions to generate the PDF report."
+    )
 
 # ---------------------------------------------------------
 # Model notes
