@@ -8,3 +8,4 @@ openpyxl
 xlsxwriter
 python-dotenv
 openai
+reportlab>=4.0.0
