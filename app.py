@@ -6,7 +6,7 @@ import streamlit as st
 
 from ai_analysis import generate_rule_based_analysis
 from data_sources import get_company_data
-from sec_data import get_sec_company_filings
+from sec_data import get_sec_cik_from_ticker, get_sec_company_filings
 from exports import create_excel_model, create_pdf_report
 from financial_model import (
     calculate_dcf,
@@ -820,27 +820,33 @@ with st.expander("Model methodology"):
 st.divider()
 st.header("Official SEC filings")
 
-sec_cik = st.text_input(
-    "SEC CIK number",
-    value="0000320193",
-    help="Apple's SEC CIK is included as an example.",
+sec_ticker = st.text_input(
+    "US company ticker",
+    value=st.session_state.loaded_ticker or "AAPL",
+    help="Enter a US-listed ticker such as AAPL, MSFT or AMZN.",
 )
 
 if st.button("Load SEC filings"):
     try:
+        sec_cik = get_sec_cik_from_ticker(sec_ticker)
         sec_company, sec_filings = get_sec_company_filings(sec_cik)
 
-        st.success(f"Filings loaded for {sec_company}")
+        st.success(
+            f"Filings loaded for {sec_company} "
+            f"(Ticker: {sec_ticker.upper()}, CIK: {sec_cik})"
+        )
 
         if sec_filings:
-            for filing in sec_filings[:10]:
+            st.info(f"{len(sec_filings)} filings found.")
+
+            for filing in sec_filings:
                 st.markdown(
                     f"**{filing['Form']}** | "
                     f"{filing['Filing date']} | "
                     f"[Open official filing]({filing['URL']})"
                 )
         else:
-            st.warning("No recent SEC filings were found.")
+            st.warning("No SEC filings were found.")
 
     except Exception as error:
         st.error(f"Could not retrieve SEC filings: {error}")
