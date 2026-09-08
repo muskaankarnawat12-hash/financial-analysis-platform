@@ -922,6 +922,163 @@ else:
                 "to compare its market price with the DCF value."
             )
 
+        st.subheader("Scenario comparison")
+
+        scenario_rows = []
+        base_revenue_growth = revenue_growth_input / 100
+        base_ebitda_margin = ebitda_margin_input / 100
+
+        for scenario_name in ["Downside", "Base", "Upside"]:
+            scenario_growth, scenario_margin = apply_scenario(
+                scenario=scenario_name,
+                revenue_growth=base_revenue_growth,
+                ebitda_margin=base_ebitda_margin,
+            )
+
+            scenario_forecast = forecast_financials(
+                starting_revenue=starting_revenue,
+                revenue_growth=scenario_growth,
+                ebitda_margin=scenario_margin,
+                depreciation_percent=depreciation_percent,
+                tax_rate=tax_rate,
+                capex_percent=capex_percent,
+                nwc_percent=nwc_percent,
+                forecast_years=forecast_years,
+                first_forecast_year=int(first_forecast_year),
+            )
+
+            scenario_valuation = calculate_dcf(
+                forecast=scenario_forecast,
+                wacc=wacc,
+                terminal_growth=terminal_growth,
+                cash=cash,
+                debt=debt,
+                diluted_shares=diluted_shares,
+            )
+
+            scenario_final_year = scenario_forecast.iloc[-1]
+            scenario_value_per_share = float(
+                scenario_valuation["Implied Value Per Share"]
+            )
+
+            scenario_upside = None
+
+            if (
+                current_price is not None
+                and float(current_price) > 0
+                and loaded_ticker == ticker
+            ):
+                scenario_upside = (
+                    scenario_value_per_share / float(current_price) - 1
+                )
+
+            scenario_rows.append(
+                {
+                    "Scenario": scenario_name,
+                    "Revenue growth": scenario_growth,
+                    "EBITDA margin": scenario_margin,
+                    "Final-year revenue": float(
+                        scenario_final_year["Revenue"]
+                    ),
+                    "Final-year EBITDA": float(
+                        scenario_final_year["EBITDA"]
+                    ),
+                    "Final-year free cash flow": float(
+                        scenario_final_year["Free Cash Flow"]
+                    ),
+                    "Enterprise value": float(
+                        scenario_valuation["Enterprise Value"]
+                    ),
+                    "Equity value": float(
+                        scenario_valuation["Equity Value"]
+                    ),
+                    "Value per share": scenario_value_per_share,
+                    "Upside / downside": scenario_upside,
+                }
+            )
+
+        scenario_table = pd.DataFrame(scenario_rows)
+
+        st.dataframe(
+            scenario_table,
+            hide_index=True,
+            width="stretch",
+            column_config={
+                "Revenue growth": st.column_config.NumberColumn(
+                    "Revenue growth",
+                    format="percent",
+                ),
+                "EBITDA margin": st.column_config.NumberColumn(
+                    "EBITDA margin",
+                    format="percent",
+                ),
+                "Final-year revenue": st.column_config.NumberColumn(
+                    "Final-year revenue",
+                    format="%.2f",
+                ),
+                "Final-year EBITDA": st.column_config.NumberColumn(
+                    "Final-year EBITDA",
+                    format="%.2f",
+                ),
+                "Final-year free cash flow": (
+                    st.column_config.NumberColumn(
+                        "Final-year free cash flow",
+                        format="%.2f",
+                    )
+                ),
+                "Enterprise value": st.column_config.NumberColumn(
+                    "Enterprise value",
+                    format="%.2f",
+                ),
+                "Equity value": st.column_config.NumberColumn(
+                    "Equity value",
+                    format="%.2f",
+                ),
+                "Value per share": st.column_config.NumberColumn(
+                    "Value per share",
+                    format="%.2f",
+                ),
+                "Upside / downside": st.column_config.NumberColumn(
+                    "Upside / downside",
+                    format="percent",
+                ),
+            },
+        )
+
+        scenario_chart = go.Figure(
+            go.Bar(
+                x=scenario_table["Scenario"],
+                y=scenario_table["Value per share"],
+                marker_color=["#C00000", "#4472C4", "#70AD47"],
+                name="DCF value per share",
+            )
+        )
+
+        if (
+            current_price is not None
+            and float(current_price) > 0
+            and loaded_ticker == ticker
+        ):
+            scenario_chart.add_hline(
+                y=float(current_price),
+                line_dash="dash",
+                line_color="#FFC000",
+                annotation_text="Current market price",
+            )
+
+        scenario_chart.update_layout(
+            xaxis_title="Scenario",
+            yaxis_title=f"{currency} per share",
+            showlegend=False,
+        )
+
+        st.plotly_chart(scenario_chart, width="stretch")
+
+        st.caption(
+            "Scenario values use the same WACC, terminal growth, cash, "
+            "debt and diluted-share assumptions."
+        )
+
         with st.expander("View valuation calculation"):
             valuation_table = pd.DataFrame(
                 {
@@ -1506,4 +1663,3 @@ if st.button("Build historical analysis"):
         st.error(
             f"Could not build historical analysis: {error}"
         )
-
