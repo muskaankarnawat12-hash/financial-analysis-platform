@@ -215,3 +215,101 @@ def identify_financial_red_flags(
         )
 
     return flags
+def build_historical_analysis(sec_financial_data):
+    """Convert SEC financial facts into a historical analysis table."""
+
+    financial_data = sec_financial_data.get("Financial Data", {})
+    rows = []
+
+    for metric, records in financial_data.items():
+        for record in records:
+            value = record.get("Value")
+            period = record.get("Period")
+
+            if value is not None and period:
+                rows.append(
+                    {
+                        "Period": period,
+                        "Metric": metric,
+                        "Value": value / 1_000_000,
+                    }
+                )
+
+    if not rows:
+        return pd.DataFrame()
+
+    historical = pd.DataFrame(rows)
+
+    historical = historical.pivot_table(
+        index="Period",
+        columns="Metric",
+        values="Value",
+        aggfunc="first",
+    ).sort_index()
+    
+     # Keep fiscal-year periods with reported total assets.
+    if "Total Assets" in historical.columns:
+        historical = historical[
+            historical["Total Assets"].notna()
+        ]
+
+    if "Revenue" in historical.columns:
+        historical["Revenue Growth"] = (
+            historical["Revenue"].pct_change()
+        )
+
+    if {
+        "Gross Profit",
+        "Revenue",
+    }.issubset(historical.columns):
+        historical["Gross Margin"] = (
+            historical["Gross Profit"]
+            / historical["Revenue"]
+        )
+
+    if {
+        "Operating Income",
+        "Revenue",
+    }.issubset(historical.columns):
+        historical["Operating Margin"] = (
+            historical["Operating Income"]
+            / historical["Revenue"]
+        )
+
+    if {
+        "Net Income",
+        "Revenue",
+    }.issubset(historical.columns):
+        historical["Net Margin"] = (
+            historical["Net Income"]
+            / historical["Revenue"]
+        )
+
+    if {
+        "Operating Cash Flow",
+        "Capital Expenditure",
+    }.issubset(historical.columns):
+        historical["Free Cash Flow"] = (
+            historical["Operating Cash Flow"]
+            - historical["Capital Expenditure"]
+        )
+
+    if {
+        "Free Cash Flow",
+        "Revenue",
+    }.issubset(historical.columns):
+        historical["Free Cash Flow Margin"] = (
+            historical["Free Cash Flow"]
+            / historical["Revenue"]
+        )
+
+    if {
+        "Long-Term Debt",
+        "Cash",
+    }.issubset(historical.columns):
+        historical["Net Debt"] = (
+            historical["Long-Term Debt"]
+            - historical["Cash"]
+        )
+
+    return historical.reset_index()

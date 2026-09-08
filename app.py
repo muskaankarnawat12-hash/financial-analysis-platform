@@ -13,6 +13,7 @@ from sec_data import (
 )
 from exports import create_excel_model, create_pdf_report
 from financial_model import (
+    build_historical_analysis,
     calculate_dcf,
     create_sensitivity_table,
     forecast_financials,
@@ -1032,3 +1033,94 @@ if st.button("Load SEC financial data"):
 
     except Exception as error:
         st.error(f"Could not retrieve SEC financial data: {error}")
+
+
+st.divider()
+st.header("Historical financial analysis")
+
+if st.button("Build historical analysis"):
+    try:
+        historical_cik = get_sec_cik_from_ticker(sec_ticker)
+        historical_sec_data = get_sec_financial_facts(historical_cik)
+
+        historical_analysis = build_historical_analysis(
+            historical_sec_data
+        )
+
+        if historical_analysis.empty:
+            st.warning("No historical financial data was found.")
+
+        else:
+            st.success(
+                f"Historical analysis created for "
+                f"{historical_sec_data['Company']}."
+            )
+            annual_history = historical_analysis.copy()
+
+            # SEC company facts can include comparative quarterly periods
+            # reported inside a 10-K. Keep periods with annual balance-sheet
+            # data so the historical table contains fiscal years only.
+            if "Total Assets" in annual_history.columns:
+                annual_history = annual_history[
+                    annual_history["Total Assets"].notna()
+                ]
+
+            display_history = (
+                annual_history
+                .tail(10)
+                .set_index("Period")
+                .transpose()
+            )
+
+            display_history.index.name = "Financial item"
+            display_history = display_history.reset_index()
+            display_history = display_history.astype(object)
+
+            display_history = display_history.where(
+                pd.notna(display_history),
+                "N/A",
+            )
+
+            display_history = display_history.replace(
+                {
+                    None: "N/A",
+                    "None": "N/A",
+                    "nan": "N/A",
+                    "<NA>": "N/A",
+                }
+            )
+
+            st.caption(
+                "Figures are shown in USD millions. N/A means the metric "
+                "was unavailable in the SEC filing; it does not mean zero."
+            )
+
+            st.dataframe(
+                display_history,
+                hide_index=True,
+                width="stretch",
+            )
+
+            chart_columns = [
+                column
+                for column in [
+                    "Revenue",
+                    "Net Income",
+                    "Operating Cash Flow",
+                    "Free Cash Flow",
+                ]
+                if column in annual_history.columns
+            ]
+
+            if chart_columns:
+                historical_chart = annual_history.set_index(
+                    "Period"
+                )[chart_columns]
+
+                st.subheader("Historical performance trend")
+                st.line_chart(historical_chart)
+
+    except Exception as error:
+        st.error(
+            f"Could not build historical analysis: {error}"
+        )

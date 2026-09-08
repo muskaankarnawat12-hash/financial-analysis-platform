@@ -138,29 +138,76 @@ def get_sec_financial_facts(cik):
     us_gaap = company_facts.get("facts", {}).get("us-gaap", {})
 
     financial_concepts = {
+        # Income statement
         "Revenue": [
             "RevenueFromContractWithCustomerExcludingAssessedTax",
             "Revenues",
             "SalesRevenueNet",
         ],
+        "Cost of Revenue": [
+            "CostOfRevenue",
+            "CostOfGoodsAndServicesSold",
+            "CostOfGoodsSold",
+        ],
+        "Gross Profit": [
+            "GrossProfit",
+        ],
+        "Operating Income": [
+            "OperatingIncomeLoss",
+        ],
         "Net Income": [
             "NetIncomeLoss",
             "ProfitLoss",
         ],
-        "Total Assets": [
-            "Assets",
-        ],
+
+        # Balance sheet
         "Cash": [
             "CashAndCashEquivalentsAtCarryingValue",
             "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents",
+        ],
+        "Accounts Receivable": [
+            "AccountsReceivableNetCurrent",
+            "AccountsNotesAndLoansReceivableNetCurrent",
+        ],
+        "Inventory": [
+            "InventoryNet",
+        ],
+        "Current Assets": [
+            "AssetsCurrent",
+        ],
+        "Total Assets": [
+            "Assets",
+        ],
+        "Accounts Payable": [
+            "AccountsPayableCurrent",
+        ],
+        "Current Liabilities": [
+            "LiabilitiesCurrent",
+        ],
+        "Total Liabilities": [
+            "Liabilities",
+        ],
+        "Long-Term Debt": [
+            "LongTermDebt",
+            "LongTermDebtNoncurrent",
+            "LongTermDebtAndFinanceLeaseObligationsNoncurrent",
         ],
         "Total Equity": [
             "StockholdersEquity",
             "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest",
         ],
-        "Long-Term Debt": [
-            "LongTermDebt",
-            "LongTermDebtNoncurrent",
+
+        # Cash-flow statement
+        "Operating Cash Flow": [
+            "NetCashProvidedByUsedInOperatingActivities",
+        ],
+        "Capital Expenditure": [
+            "PaymentsToAcquirePropertyPlantAndEquipment",
+            "PaymentsForAdditionsToPropertyPlantAndEquipment",
+        ],
+        "Depreciation and Amortisation": [
+            "DepreciationDepletionAndAmortization",
+            "DepreciationDepletionAndAmortizationPropertyPlantAndEquipment",
         ],
     }
 
