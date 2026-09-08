@@ -249,6 +249,69 @@ with st.sidebar:
             revenue_records = sec_metrics.get("Revenue", [])
             cash_records = sec_metrics.get("Cash", [])
             debt_records = sec_metrics.get("Long-Term Debt", [])
+            historical_model_data = build_historical_analysis(
+                model_sec_data
+            )
+
+            if (
+                not historical_model_data.empty
+                and "Total Assets" in historical_model_data.columns
+            ):
+                historical_model_data = historical_model_data[
+                    historical_model_data["Total Assets"].notna()
+                ]
+
+            if (
+                not historical_model_data.empty
+                and "Revenue" in historical_model_data.columns
+            ):
+                revenue_history = (
+                    historical_model_data
+                    .dropna(subset=["Revenue"])
+                    .sort_values("Period")
+                    .tail(4)
+                )
+
+                if len(revenue_history) >= 2:
+                    beginning_revenue = revenue_history.iloc[0][
+                        "Revenue"
+                    ]
+                    ending_revenue = revenue_history.iloc[-1][
+                        "Revenue"
+                    ]
+                    growth_periods = len(revenue_history) - 1
+
+                    if beginning_revenue > 0:
+                        historical_cagr = (
+                            ending_revenue
+                            / beginning_revenue
+                        ) ** (1 / growth_periods) - 1
+
+                        st.session_state.revenue_growth_input = max(
+                            -20.0,
+                            min(50.0, historical_cagr * 100),
+                        )
+
+            if (
+                not historical_model_data.empty
+                and "EBITDA Margin"
+                in historical_model_data.columns
+            ):
+                ebitda_margin_history = (
+                    historical_model_data["EBITDA Margin"]
+                    .dropna()
+                    .tail(3)
+                )
+
+                if not ebitda_margin_history.empty:
+                    average_ebitda_margin = (
+                        ebitda_margin_history.mean()
+                    )
+
+                    st.session_state.ebitda_margin_input = max(
+                        -30.0,
+                        min(60.0, average_ebitda_margin * 100),
+                    )
 
             if revenue_records:
                 st.session_state.starting_revenue = (
@@ -282,32 +345,24 @@ with st.sidebar:
         key="starting_revenue",
     )
 
-    growth_default = max(
-        -20.0,
-        min(50.0, st.session_state.revenue_growth_input),
-    )
-
     revenue_growth_input = st.slider(
         "Annual revenue growth",
         min_value=-20.0,
         max_value=50.0,
-        value=float(growth_default),
         step=0.5,
         format="%.1f%%",
-    )
-
-    margin_default = max(
-        -30.0,
-        min(60.0, st.session_state.ebitda_margin_input),
+        key="revenue_growth_input",
+        help="Defaults to the recent historical SEC revenue CAGR.",
     )
 
     ebitda_margin_input = st.slider(
         "EBITDA margin",
         min_value=-30.0,
         max_value=60.0,
-        value=float(margin_default),
         step=0.5,
         format="%.1f%%",
+        key="ebitda_margin_input",
+        help="Defaults to the recent historical SEC EBITDA margin.",
     )
 
     depreciation_input = st.slider(
