@@ -237,13 +237,48 @@ with st.sidebar:
 
     st.divider()
 
+    if st.button("Use SEC actuals as model inputs"):
+        try:
+            model_ticker = st.session_state.loaded_ticker
+            model_cik = get_sec_cik_from_ticker(model_ticker)
+            model_sec_data = get_sec_financial_facts(model_cik)
+
+            sec_metrics = model_sec_data["Financial Data"]
+
+            revenue_records = sec_metrics.get("Revenue", [])
+            cash_records = sec_metrics.get("Cash", [])
+            debt_records = sec_metrics.get("Long-Term Debt", [])
+
+            if revenue_records:
+                st.session_state.starting_revenue = (
+                    revenue_records[0]["Value"] / 1_000_000
+                )
+
+            if cash_records:
+                st.session_state.cash = (
+                    cash_records[0]["Value"] / 1_000_000
+                )
+
+            if debt_records:
+                st.session_state.debt = (
+                    debt_records[0]["Value"] / 1_000_000
+                )
+
+            st.success(
+                "SEC actuals applied in USD millions. "
+                "Revenue, cash and debt inputs were updated."
+            )
+
+        except Exception as error:
+            st.error(f"Could not apply SEC actuals: {error}")
+
     st.header("Operating assumptions")
 
     starting_revenue = st.number_input(
         "Latest reported revenue",
         min_value=0.0,
-        value=float(st.session_state.starting_revenue),
         step=100.0,
+        key="starting_revenue",
     )
 
     growth_default = max(
@@ -317,15 +352,15 @@ with st.sidebar:
     cash = st.number_input(
         "Cash",
         min_value=0.0,
-        value=float(st.session_state.cash),
         step=10.0,
+        key="cash",
     )
 
     debt = st.number_input(
         "Debt",
         min_value=0.0,
-        value=float(st.session_state.debt),
         step=10.0,
+        key="debt",
     )
 
     diluted_shares = st.number_input(
