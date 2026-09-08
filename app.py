@@ -820,6 +820,15 @@ with st.expander("Model methodology"):
 st.divider()
 st.header("Official SEC filings")
 
+if "sec_filings_data" not in st.session_state:
+    st.session_state.sec_filings_data = []
+
+if "sec_company_name" not in st.session_state:
+    st.session_state.sec_company_name = ""
+
+if "sec_company_cik" not in st.session_state:
+    st.session_state.sec_company_cik = ""
+
 sec_ticker = st.text_input(
     "US company ticker",
     value=st.session_state.loaded_ticker or "AAPL",
@@ -831,22 +840,111 @@ if st.button("Load SEC filings"):
         sec_cik = get_sec_cik_from_ticker(sec_ticker)
         sec_company, sec_filings = get_sec_company_filings(sec_cik)
 
-        st.success(
-            f"Filings loaded for {sec_company} "
-            f"(Ticker: {sec_ticker.upper()}, CIK: {sec_cik})"
-        )
-
-        if sec_filings:
-            st.info(f"{len(sec_filings)} filings found.")
-
-            for filing in sec_filings:
-                st.markdown(
-                    f"**{filing['Form']}** | "
-                    f"{filing['Filing date']} | "
-                    f"[Open official filing]({filing['URL']})"
-                )
-        else:
-            st.warning("No SEC filings were found.")
+        st.session_state.sec_filings_data = sec_filings
+        st.session_state.sec_company_name = sec_company
+        st.session_state.sec_company_cik = sec_cik
 
     except Exception as error:
         st.error(f"Could not retrieve SEC filings: {error}")
+
+if st.session_state.sec_filings_data:
+    sec_filings = st.session_state.sec_filings_data
+
+    st.success(
+        f"Filings loaded for {st.session_state.sec_company_name} "
+        f"(CIK: {st.session_state.sec_company_cik})"
+    )
+
+    form_options = sorted(
+        {
+            filing["Form"]
+            for filing in sec_filings
+        }
+    )
+
+    year_options = sorted(
+        {
+            filing["Filing date"][:4]
+            for filing in sec_filings
+            if filing["Filing date"]
+        },
+        reverse=True,
+    )
+
+    filter_column_1, filter_column_2 = st.columns(2)
+
+    with filter_column_1:
+        selected_forms = st.multiselect(
+            "Filter by filing type",
+            options=form_options,
+            default=[],
+            help="Leave empty to include every filing type.",
+        )
+
+    with filter_column_2:
+        selected_year = st.selectbox(
+            "Filter by filing year",
+            options=["All years"] + year_options,
+        )
+
+    filing_search = st.text_input(
+        "Search filings",
+        placeholder="Example: 10-K, 2023 or 8-K",
+    )
+
+    filtered_filings = sec_filings
+
+    if selected_forms:
+        filtered_filings = [
+            filing
+            for filing in filtered_filings
+            if filing["Form"] in selected_forms
+        ]
+
+    if selected_year != "All years":
+        filtered_filings = [
+            filing
+            for filing in filtered_filings
+            if filing["Filing date"].startswith(selected_year)
+        ]
+
+    if filing_search:
+        search_text = filing_search.strip().lower()
+
+        filtered_filings = [
+            filing
+            for filing in filtered_filings
+            if search_text in filing["Form"].lower()
+            or search_text in filing["Filing date"].lower()
+            or search_text in filing["Report date"].lower()
+        ]
+
+    maximum_results = st.slider(
+        "Maximum filings displayed",
+        min_value=10,
+        max_value=500,
+        value=50,
+        step=10,
+    )
+
+    displayed_filings = filtered_filings[:maximum_results]
+
+    st.info(
+        f"Displaying {len(displayed_filings)} of "
+        f"{len(filtered_filings)} matching filings. "
+        f"{len(sec_filings)} total filings were retrieved."
+    )
+
+    filings_table = pd.DataFrame(displayed_filings)
+
+    st.dataframe(
+        filings_table,
+        hide_index=True,
+        width="stretch",
+        column_config={
+            "URL": st.column_config.LinkColumn(
+                "Official SEC filing",
+                display_text="Open filing",
+            )
+        },
+    )
