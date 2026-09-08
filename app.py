@@ -70,6 +70,9 @@ if "current_price" not in st.session_state:
 if "historical_revenue" not in st.session_state:
     st.session_state.historical_revenue = pd.DataFrame()
 
+if "sec_historical_analysis" not in st.session_state:
+    st.session_state.sec_historical_analysis = pd.DataFrame()
+
 
 # ---------------------------------------------------------
 # Formatting functions
@@ -260,6 +263,10 @@ with st.sidebar:
                 historical_model_data = historical_model_data[
                     historical_model_data["Total Assets"].notna()
                 ]
+
+            st.session_state.sec_historical_analysis = (
+                historical_model_data.copy()
+            )
 
             if (
                 not historical_model_data.empty
@@ -574,6 +581,146 @@ else:
     st.info(
         "No historical revenue has been loaded. Enter a ticker "
         "and click 'Load company financials'."
+    )
+
+# ---------------------------------------------------------
+# Actual versus forecast bridge
+# ---------------------------------------------------------
+
+st.subheader("Actual vs Forecast")
+
+sec_history = st.session_state.get(
+    "sec_historical_analysis",
+    pd.DataFrame(),
+)
+
+bridge_metrics = ["Revenue", "EBITDA", "Free Cash Flow"]
+
+if isinstance(sec_history, pd.DataFrame) and not sec_history.empty:
+    actual_columns = [
+        column
+        for column in bridge_metrics
+        if column in sec_history.columns
+    ]
+
+    actuals = sec_history[["Period", *actual_columns]].copy()
+    actuals["Year"] = pd.to_datetime(
+        actuals["Period"],
+        errors="coerce",
+    ).dt.year
+    actuals = (
+        actuals
+        .dropna(subset=["Year"])
+        .sort_values("Year")
+        .drop_duplicates(subset=["Year"], keep="last")
+        .tail(5)
+    )
+    actuals["Year"] = actuals["Year"].astype(int)
+
+    forecast_columns = [
+        column
+        for column in bridge_metrics
+        if column in forecast.columns
+    ]
+    projections = forecast[["Year", *forecast_columns]].copy()
+
+    actual_long = actuals.melt(
+        id_vars="Year",
+        value_vars=actual_columns,
+        var_name="Financial item",
+        value_name="Value",
+    )
+    actual_long["Type"] = "Actual"
+
+    forecast_long = projections.melt(
+        id_vars="Year",
+        value_vars=forecast_columns,
+        var_name="Financial item",
+        value_name="Value",
+    )
+    forecast_long["Type"] = "Forecast"
+
+    bridge_data = pd.concat(
+        [actual_long, forecast_long],
+        ignore_index=True,
+    ).dropna(subset=["Value"])
+
+    bridge_chart = go.Figure()
+    chart_colours = {
+        "Revenue": "#4472C4",
+        "EBITDA": "#70AD47",
+        "Free Cash Flow": "#ED7D31",
+    }
+
+    for financial_item in bridge_metrics:
+        for data_type, dash_style in [
+            ("Actual", "solid"),
+            ("Forecast", "dash"),
+        ]:
+            series = bridge_data[
+                (bridge_data["Financial item"] == financial_item)
+                & (bridge_data["Type"] == data_type)
+            ]
+
+            if not series.empty:
+                bridge_chart.add_trace(
+                    go.Scatter(
+                        x=series["Year"],
+                        y=series["Value"],
+                        name=f"{financial_item} - {data_type}",
+                        mode="lines+markers",
+                        line={
+                            "color": chart_colours[financial_item],
+                            "dash": dash_style,
+                        },
+                    )
+                )
+
+    bridge_chart.update_layout(
+        xaxis_title="Financial year",
+        yaxis_title="USD millions",
+        hovermode="x unified",
+        legend_title="Metric and period type",
+    )
+
+    st.plotly_chart(bridge_chart, width="stretch")
+
+    actual_table = actuals.set_index("Year")[actual_columns].transpose()
+    actual_table.columns = [
+        f"{int(year)}A" for year in actual_table.columns
+    ]
+
+    forecast_table = (
+        projections
+        .set_index("Year")[forecast_columns]
+        .transpose()
+    )
+    forecast_table.columns = [
+        f"{int(year)}F" for year in forecast_table.columns
+    ]
+
+    bridge_table = pd.concat(
+        [actual_table, forecast_table],
+        axis=1,
+    )
+    bridge_table.index.name = "Financial item"
+    bridge_table = bridge_table.reset_index()
+
+    st.dataframe(
+        bridge_table,
+        hide_index=True,
+        width="stretch",
+    )
+
+    st.caption(
+        "A = SEC-reported actual. F = model forecast. "
+        "Figures are shown in USD millions."
+    )
+
+else:
+    st.info(
+        "Click 'Use SEC actuals as model inputs' in the sidebar "
+        "to build the Actual vs Forecast comparison."
     )
 
 # ---------------------------------------------------------
