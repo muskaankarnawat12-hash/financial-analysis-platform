@@ -2,7 +2,7 @@ import requests
 
 
 SEC_HEADERS = {
-    "User-Agent": "Financial Analysis Platform muskaankarnawat12@.com"
+    "User-Agent": "Financial Analysis Platform muskaankarnawat12@gmail.com"
 }
 
 

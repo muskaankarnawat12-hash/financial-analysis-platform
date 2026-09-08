@@ -7,6 +7,7 @@ import streamlit as st
 from ai_analysis import generate_rule_based_analysis
 from data_sources import get_company_data
 from exports import create_excel_model, create_pdf_report
+from sec_data import get_sec_company_filings
 from financial_model import (
     calculate_dcf,
     create_sensitivity_table,
