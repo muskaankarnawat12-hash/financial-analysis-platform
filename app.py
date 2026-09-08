@@ -5,7 +5,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from ai_analysis import generate_rule_based_analysis
-from data_sources import get_company_data
+from data_sources import get_comparable_companies, get_company_data
 from sec_data import (
     get_sec_cik_from_ticker,
     get_sec_company_filings,
@@ -72,6 +72,9 @@ if "historical_revenue" not in st.session_state:
 
 if "sec_historical_analysis" not in st.session_state:
     st.session_state.sec_historical_analysis = pd.DataFrame()
+
+if "comparable_companies" not in st.session_state:
+    st.session_state.comparable_companies = pd.DataFrame()
 
 
 # ---------------------------------------------------------
@@ -1153,6 +1156,159 @@ else:
 
     except ValueError as error:
         st.error(str(error))
+
+
+# ---------------------------------------------------------
+# Comparable companies
+# ---------------------------------------------------------
+
+st.subheader("Comparable companies")
+
+st.caption(
+    "Compare the selected company with listed peers. "
+    "Enter Yahoo Finance ticker symbols separated by commas."
+)
+
+peer_tickers_text = st.text_input(
+    "Peer tickers",
+    value="MSFT, GOOGL, AMZN, META",
+    help="Examples: MSFT, GOOGL, AMZN, META",
+)
+
+if st.button("Load comparable companies"):
+    peer_tickers = [
+        peer.strip().upper()
+        for peer in peer_tickers_text.split(",")
+        if peer.strip()
+    ]
+
+    comparison_tickers = [ticker, *peer_tickers]
+
+    with st.spinner("Loading comparable-company data..."):
+        try:
+            comparable_companies = get_comparable_companies(
+                comparison_tickers
+            )
+            comparable_companies.insert(
+                0,
+                "Role",
+                comparable_companies["Ticker"].apply(
+                    lambda peer: (
+                        "Selected company"
+                        if peer == ticker
+                        else "Peer"
+                    )
+                ),
+            )
+
+            st.session_state.comparable_companies = (
+                comparable_companies
+            )
+
+            failed_tickers = comparable_companies.attrs.get(
+                "failed_tickers",
+                [],
+            )
+
+            if failed_tickers:
+                st.warning(
+                    "No data was returned for: "
+                    + ", ".join(failed_tickers)
+                )
+
+        except ValueError as error:
+            st.error(str(error))
+
+comparable_companies = st.session_state.get(
+    "comparable_companies",
+    pd.DataFrame(),
+)
+
+if not comparable_companies.empty:
+    st.dataframe(
+        comparable_companies,
+        hide_index=True,
+        width="stretch",
+        column_config={
+            "Market cap": st.column_config.NumberColumn(
+                "Market cap (millions)",
+                format="%.2f",
+            ),
+            "Enterprise value": st.column_config.NumberColumn(
+                "Enterprise value (millions)",
+                format="%.2f",
+            ),
+            "Revenue": st.column_config.NumberColumn(
+                "Revenue (millions)",
+                format="%.2f",
+            ),
+            "EBITDA": st.column_config.NumberColumn(
+                "EBITDA (millions)",
+                format="%.2f",
+            ),
+            "P/E": st.column_config.NumberColumn(
+                "P/E",
+                format="%.2fx",
+            ),
+            "EV/Revenue": st.column_config.NumberColumn(
+                "EV/Revenue",
+                format="%.2fx",
+            ),
+            "EV/EBITDA": st.column_config.NumberColumn(
+                "EV/EBITDA",
+                format="%.2fx",
+            ),
+            "Revenue growth": st.column_config.NumberColumn(
+                "Revenue growth",
+                format="percent",
+            ),
+            "EBITDA margin": st.column_config.NumberColumn(
+                "EBITDA margin",
+                format="percent",
+            ),
+        },
+    )
+
+    multiple_columns = ["P/E", "EV/Revenue", "EV/EBITDA"]
+    peer_medians = (
+        comparable_companies[
+            comparable_companies["Role"] == "Peer"
+        ][multiple_columns]
+        .median(numeric_only=True)
+    )
+
+    median_columns = st.columns(3)
+
+    for metric_column, metric_name in zip(
+        median_columns,
+        multiple_columns,
+    ):
+        median_value = peer_medians.get(metric_name)
+
+        metric_column.metric(
+            f"Peer median {metric_name}",
+            (
+                f"{median_value:.2f}x"
+                if pd.notna(median_value)
+                else "N/A"
+            ),
+        )
+
+    multiple_chart_data = comparable_companies[
+        ["Ticker", "EV/Revenue", "EV/EBITDA"]
+    ].set_index("Ticker")
+
+    st.bar_chart(multiple_chart_data)
+
+    st.caption(
+        "Source: Yahoo Finance. Peer outputs are indicative and should "
+        "be verified against primary filings or a licensed data source."
+    )
+
+else:
+    st.info(
+        "Enter peer tickers and click 'Load comparable companies'."
+    )
 
 
 # ---------------------------------------------------------
