@@ -858,6 +858,70 @@ else:
             ),
         )
 
+        st.subheader("Valuation benchmark")
+
+        current_price = st.session_state.get("current_price")
+        loaded_ticker = st.session_state.get("loaded_ticker")
+        implied_value_per_share = float(
+            valuation["Implied Value Per Share"]
+        )
+
+        if (
+            current_price is not None
+            and float(current_price) > 0
+            and loaded_ticker == ticker
+        ):
+            current_price = float(current_price)
+            implied_upside = (
+                implied_value_per_share / current_price - 1
+            )
+
+            benchmark_1, benchmark_2, benchmark_3 = st.columns(3)
+
+            benchmark_1.metric(
+                "Current market price",
+                format_currency(current_price, currency),
+            )
+
+            benchmark_2.metric(
+                "DCF value per share",
+                format_currency(implied_value_per_share, currency),
+            )
+
+            benchmark_3.metric(
+                "Implied upside / downside",
+                f"{implied_upside:.1%}",
+            )
+
+            if implied_upside >= 0.10:
+                st.success(
+                    "The DCF estimate is above the current market price. "
+                    "This indicates potential upside under the selected "
+                    "assumptions."
+                )
+            elif implied_upside <= -0.10:
+                st.warning(
+                    "The DCF estimate is below the current market price. "
+                    "This indicates potential downside under the selected "
+                    "assumptions."
+                )
+            else:
+                st.info(
+                    "The DCF estimate is broadly in line with the current "
+                    "market price under the selected assumptions."
+                )
+
+            st.caption(
+                "This model output is for analytical and educational "
+                "purposes and is not investment advice."
+            )
+
+        else:
+            st.info(
+                "Click 'Load company financials' for the selected ticker "
+                "to compare its market price with the DCF value."
+            )
+
         with st.expander("View valuation calculation"):
             valuation_table = pd.DataFrame(
                 {
@@ -1442,3 +1506,4 @@ if st.button("Build historical analysis"):
         st.error(
             f"Could not build historical analysis: {error}"
         )
+
