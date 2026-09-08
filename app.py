@@ -358,7 +358,7 @@ with st.sidebar:
     ebitda_margin_input = st.slider(
         "EBITDA margin",
         min_value=-30.0,
-        max_value=60.0,
+        max_value=100.0,
         step=0.5,
         format="%.1f%%",
         key="ebitda_margin_input",
