@@ -1095,11 +1095,127 @@ if st.button("Build historical analysis"):
                 "was unavailable in the SEC filing; it does not mean zero."
             )
 
-            st.dataframe(
-                display_history,
-                hide_index=True,
-                width="stretch",
+            income_statement_items = [
+                "Revenue",
+                "Cost of Revenue",
+                "Gross Profit",
+                "Operating Income",
+                "Depreciation and Amortisation",
+                "EBITDA",
+                "Net Income",
+            ]
+
+            balance_sheet_items = [
+                "Cash",
+                "Accounts Receivable",
+                "Inventory",
+                "Current Assets",
+                "Total Assets",
+                "Accounts Payable",
+                "Current Liabilities",
+                "Long-Term Debt",
+                "Total Liabilities",
+                "Total Equity",
+                "Net Debt",
+            ]
+
+            cash_flow_items = [
+                "Operating Cash Flow",
+                "Capital Expenditure",
+                "Depreciation and Amortisation",
+                "Free Cash Flow",
+            ]
+
+            ratio_items = [
+                "Revenue Growth",
+                "Gross Margin",
+                "Operating Margin",
+                "EBITDA Margin",
+                "Net Margin",
+                "Free Cash Flow Margin",
+            ]
+
+            def select_financial_items(item_names):
+                available_items = set(
+                    display_history["Financial item"]
+                )
+
+                selected_items = [
+                    item
+                    for item in item_names
+                    if item in available_items
+                ]
+
+                return (
+                    display_history
+                    .set_index("Financial item")
+                    .reindex(selected_items)
+                    .reset_index()
+                )
+
+            income_statement_table = select_financial_items(
+                income_statement_items
             )
+
+            balance_sheet_table = select_financial_items(
+                balance_sheet_items
+            )
+
+            cash_flow_table = select_financial_items(
+                cash_flow_items
+            )
+
+            ratios_table = select_financial_items(
+                ratio_items
+            )
+            for column in ratios_table.columns:
+                if column != "Financial item":
+                    ratios_table[column] = ratios_table[column].apply(
+                        lambda value: (
+                              value
+                              if value == "N/A"
+                              else f"{float(value):.1%}"
+                        )
+            )
+
+            income_tab, balance_tab, cash_flow_tab, ratios_tab = (
+                st.tabs(
+                    [
+                        "Income Statement",
+                        "Balance Sheet",
+                        "Cash Flow",
+                        "Ratios",
+                    ]
+                )
+            )
+
+            with income_tab:
+                st.dataframe(
+                    income_statement_table,
+                    hide_index=True,
+                    width="stretch",
+                )
+
+            with balance_tab:
+                st.dataframe(
+                    balance_sheet_table,
+                    hide_index=True,
+                    width="stretch",
+                )
+
+            with cash_flow_tab:
+                st.dataframe(
+                    cash_flow_table,
+                    hide_index=True,
+                    width="stretch",
+                )
+
+            with ratios_tab:
+                st.dataframe(
+                    ratios_table,
+                    hide_index=True,
+                    width="stretch",
+                )
 
             chart_columns = [
                 column

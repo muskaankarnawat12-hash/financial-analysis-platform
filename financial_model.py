@@ -275,6 +275,23 @@ def build_historical_analysis(sec_financial_data):
             historical["Operating Income"]
             / historical["Revenue"]
         )
+    if {
+        "Operating Income",
+        "Depreciation and Amortisation",
+    }.issubset(historical.columns):
+        historical["EBITDA"] = (
+            historical["Operating Income"]
+            + historical["Depreciation and Amortisation"]
+        )
+
+    if {
+        "EBITDA",
+        "Revenue",
+    }.issubset(historical.columns):
+        historical["EBITDA Margin"] = (
+            historical["EBITDA"]
+            / historical["Revenue"]
+        )    
 
     if {
         "Net Income",
