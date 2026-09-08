@@ -117,3 +117,99 @@ def get_sec_company_filings(cik):
     )
 
     return company_name, filings
+def get_sec_financial_facts(cik):
+    """Retrieve annual financial data from SEC XBRL filings."""
+
+    clean_cik = str(cik).strip().lstrip("0").zfill(10)
+
+    url = (
+        "https://data.sec.gov/api/xbrl/companyfacts/"
+        f"CIK{clean_cik}.json"
+    )
+
+    response = requests.get(
+        url,
+        headers=SEC_HEADERS,
+        timeout=30,
+    )
+    response.raise_for_status()
+
+    company_facts = response.json()
+    us_gaap = company_facts.get("facts", {}).get("us-gaap", {})
+
+    financial_concepts = {
+        "Revenue": [
+            "RevenueFromContractWithCustomerExcludingAssessedTax",
+            "Revenues",
+            "SalesRevenueNet",
+        ],
+        "Net Income": [
+            "NetIncomeLoss",
+            "ProfitLoss",
+        ],
+        "Total Assets": [
+            "Assets",
+        ],
+        "Cash": [
+            "CashAndCashEquivalentsAtCarryingValue",
+            "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents",
+        ],
+        "Total Equity": [
+            "StockholdersEquity",
+            "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest",
+        ],
+        "Long-Term Debt": [
+            "LongTermDebt",
+            "LongTermDebtNoncurrent",
+        ],
+    }
+
+    results = {}
+
+    for financial_name, possible_tags in financial_concepts.items():
+        values_by_period = {}
+
+        for tag in possible_tags:
+            concept = us_gaap.get(tag)
+
+            if not concept:
+                continue
+
+            usd_values = concept.get("units", {}).get("USD", [])
+
+            sorted_values = sorted(
+                usd_values,
+                key=lambda item: item.get("filed", ""),
+                reverse=True,
+            )
+
+            for item in sorted_values:
+                form = item.get("form", "")
+                fiscal_period = item.get("fp", "")
+                period_end = item.get("end", "")
+
+                if (
+                    form.startswith("10-K")
+                    and fiscal_period == "FY"
+                    and period_end
+                    and period_end not in values_by_period
+                ):
+                    values_by_period[period_end] = {
+                        "Period": period_end,
+                        "Value": item.get("val"),
+                        "Form": form,
+                        "Filed": item.get("filed", ""),
+                        "Accession": item.get("accn", ""),
+                    }
+
+        results[financial_name] = sorted(
+            values_by_period.values(),
+            key=lambda item: item["Period"],
+            reverse=True,
+        )
+
+    return {
+        "Company": company_facts.get("entityName", "Unknown company"),
+        "CIK": clean_cik,
+        "Financial Data": results,
+    }

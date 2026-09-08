@@ -6,7 +6,11 @@ import streamlit as st
 
 from ai_analysis import generate_rule_based_analysis
 from data_sources import get_company_data
-from sec_data import get_sec_cik_from_ticker, get_sec_company_filings
+from sec_data import (
+    get_sec_cik_from_ticker,
+    get_sec_company_filings,
+    get_sec_financial_facts,
+)
 from exports import create_excel_model, create_pdf_report
 from financial_model import (
     calculate_dcf,
@@ -948,3 +952,48 @@ if st.session_state.sec_filings_data:
             )
         },
     )
+    st.subheader("SEC-reported financial data")
+
+if st.button("Load SEC financial data"):
+    try:
+        financial_cik = get_sec_cik_from_ticker(sec_ticker)
+        sec_financial_data = get_sec_financial_facts(financial_cik)
+
+        financial_rows = []
+
+        for metric, records in sec_financial_data["Financial Data"].items():
+            for record in records[:5]:
+                financial_rows.append(
+                    {
+                        "Metric": metric,
+                        "Period": record["Period"],
+                        "Value (USD millions)": record["Value"] / 1_000_000,
+                        "Form": record["Form"],
+                        "Filed": record["Filed"],
+                    }
+                )
+
+        if financial_rows:
+            financial_table = pd.DataFrame(financial_rows)
+
+            st.success(
+                f"Official financial data loaded for "
+                f"{sec_financial_data['Company']}."
+            )
+
+            st.dataframe(
+                financial_table,
+                hide_index=True,
+                width="stretch",
+                column_config={
+                    "Value (USD millions)": st.column_config.NumberColumn(
+                        "Value (USD millions)",
+                        format="$ %.2f",
+                    )
+                },
+            )
+        else:
+            st.warning("No SEC financial data was found.")
+
+    except Exception as error:
+        st.error(f"Could not retrieve SEC financial data: {error}")
