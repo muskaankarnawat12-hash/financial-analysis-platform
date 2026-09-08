@@ -7,7 +7,6 @@ import streamlit as st
 from ai_analysis import generate_rule_based_analysis
 from data_sources import get_company_data
 from exports import create_excel_model, create_pdf_report
-from sec_data import get_sec_company_filings
 from financial_model import (
     calculate_dcf,
     create_sensitivity_table,
@@ -815,3 +814,32 @@ with st.expander("Model methodology"):
           not investment advice.
         """
     )
+
+
+st.divider()
+st.header("Official SEC filings")
+
+sec_cik = st.text_input(
+    "SEC CIK number",
+    value="0000320193",
+    help="Apple's SEC CIK is included as an example.",
+)
+
+if st.button("Load SEC filings"):
+    try:
+        sec_company, sec_filings = get_sec_company_filings(sec_cik)
+
+        st.success(f"Filings loaded for {sec_company}")
+
+        if sec_filings:
+            for filing in sec_filings[:10]:
+                st.markdown(
+                    f"**{filing['Form']}** | "
+                    f"{filing['Filing date']} | "
+                    f"[Open official filing]({filing['URL']})"
+                )
+        else:
+            st.warning("No recent SEC filings were found.")
+
+    except Exception as error:
+        st.error(f"Could not retrieve SEC filings: {error}")
