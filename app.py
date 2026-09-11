@@ -13,6 +13,7 @@ from sec_data import (
 )
 from exports import create_excel_model, create_pdf_report
 from india_data import get_bse_company_filings, get_nse_company_filings
+from uk_data import get_uk_company_filings
 from financial_model import (
     build_historical_analysis,
     calculate_dcf,
@@ -1968,6 +1969,158 @@ if st.session_state.bse_filings_data:
     st.caption(
         "Source: BSE Limited. Filing availability and metadata are "
         "controlled by the exchange."
+    )
+
+
+st.divider()
+st.subheader("United Kingdom — Official Companies House filings")
+
+if "uk_filings_data" not in st.session_state:
+    st.session_state.uk_filings_data = []
+
+if "uk_company_name" not in st.session_state:
+    st.session_state.uk_company_name = ""
+
+if "uk_company_number" not in st.session_state:
+    st.session_state.uk_company_number = ""
+
+uk_column_1, uk_column_2 = st.columns([2, 1])
+
+with uk_column_1:
+    uk_company_number = st.text_input(
+        "Companies House company number",
+        value="00041424",
+        help=(
+            "Enter the official company number, not a stock ticker. "
+            "Example: 00041424 for Unilever PLC."
+        ),
+    ).strip()
+
+with uk_column_2:
+    uk_history_years = st.slider(
+        "UK filing history (years)",
+        min_value=1,
+        max_value=20,
+        value=5,
+    )
+
+if st.button("Load official UK filings"):
+    with st.spinner(
+        f"Retrieving Companies House filings for {uk_company_number}..."
+    ):
+        try:
+            uk_company, uk_filings = get_uk_company_filings(
+                uk_company_number,
+                years=uk_history_years,
+            )
+            st.session_state.uk_filings_data = uk_filings
+            st.session_state.uk_company_name = uk_company
+            st.session_state.uk_company_number = uk_company_number.upper()
+
+            if not uk_filings:
+                st.warning(
+                    "No UK filings were returned for this company number "
+                    "and date range."
+                )
+
+        except Exception as error:
+            st.error(f"Could not retrieve UK filings: {error}")
+            st.markdown(
+                "[Open Companies House search]"
+                "(https://find-and-update.company-information.service.gov.uk/)"
+            )
+
+if st.session_state.uk_filings_data:
+    uk_filings_table = pd.DataFrame(st.session_state.uk_filings_data)
+    parsed_uk_dates = pd.to_datetime(
+        uk_filings_table["Filing date"],
+        errors="coerce",
+    )
+    uk_filings_table["Year"] = parsed_uk_dates.dt.year.astype("Int64")
+
+    st.success(
+        f"{len(uk_filings_table):,} official UK filings loaded for "
+        f"{st.session_state.uk_company_name} "
+        f"({st.session_state.uk_company_number})."
+    )
+
+    uk_categories = sorted(
+        uk_filings_table["Category"].dropna().unique().tolist()
+    )
+    uk_years = sorted(
+        uk_filings_table["Year"].dropna().astype(int).unique().tolist(),
+        reverse=True,
+    )
+    uk_filter_1, uk_filter_2 = st.columns(2)
+
+    with uk_filter_1:
+        selected_uk_categories = st.multiselect(
+            "Filter UK filing categories",
+            options=uk_categories,
+            help="Leave empty to display every category.",
+        )
+
+    with uk_filter_2:
+        selected_uk_year = st.selectbox(
+            "Filter UK filing year",
+            options=["All years", *uk_years],
+        )
+
+    uk_search = st.text_input(
+        "Search UK filings",
+        placeholder="Example: accounts, confirmation statement or capital",
+    ).strip().lower()
+    filtered_uk_filings = uk_filings_table.copy()
+
+    if selected_uk_categories:
+        filtered_uk_filings = filtered_uk_filings[
+            filtered_uk_filings["Category"].isin(selected_uk_categories)
+        ]
+
+    if selected_uk_year != "All years":
+        filtered_uk_filings = filtered_uk_filings[
+            filtered_uk_filings["Year"] == selected_uk_year
+        ]
+
+    if uk_search:
+        searchable_uk_text = (
+            filtered_uk_filings["Category"].fillna("")
+            + " "
+            + filtered_uk_filings["Type"].fillna("")
+            + " "
+            + filtered_uk_filings["Title"].fillna("")
+        ).str.lower()
+        filtered_uk_filings = filtered_uk_filings[
+            searchable_uk_text.str.contains(uk_search, regex=False)
+        ]
+
+    maximum_uk_results = st.slider(
+        "Maximum UK filings displayed",
+        min_value=10,
+        max_value=500,
+        value=50,
+        step=10,
+    )
+    displayed_uk_filings = filtered_uk_filings.head(maximum_uk_results)
+
+    st.info(
+        f"Displaying {len(displayed_uk_filings):,} of "
+        f"{len(filtered_uk_filings):,} matching UK filings."
+    )
+    st.dataframe(
+        displayed_uk_filings.drop(columns=["Year"]),
+        hide_index=True,
+        width="stretch",
+        column_config={
+            "URL": st.column_config.LinkColumn(
+                "Official Companies House document",
+                display_text="Open filing",
+            )
+        },
+    )
+    st.caption(
+        "Source: UK Companies House Public Data API. Filing availability "
+        "and metadata are controlled by Companies House."
     )
 
 
