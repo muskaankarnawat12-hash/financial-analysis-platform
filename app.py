@@ -14,6 +14,7 @@ from sec_data import (
 from exports import create_excel_model, create_pdf_report
 from india_data import get_bse_company_filings, get_nse_company_filings
 from uk_data import get_uk_company_filings
+from global_filings import build_global_filings_table, filter_global_filings
 from financial_model import (
     build_historical_analysis,
     calculate_dcf,
@@ -2507,3 +2508,113 @@ if st.button("Build historical analysis"):
         st.error(
             f"Could not build historical analysis: {error}"
         )
+
+
+# ---------------------------------------------------------
+# Unified global filings workspace
+# ---------------------------------------------------------
+
+st.divider()
+st.header("Unified global filings workspace")
+st.caption(
+    "Review loaded SEC, NSE, BSE and Companies House filings in one "
+    "standardised table. Load filings in the sections above to populate it."
+)
+
+global_filing_sources = [
+    {
+        "source": "United States — SEC",
+        "identifier": st.session_state.get("sec_company_cik", ""),
+        "company_name": st.session_state.get("sec_company_name", ""),
+        "filings": st.session_state.get("sec_filings_data", []),
+    },
+    {
+        "source": "India — NSE",
+        "identifier": st.session_state.get("nse_company_symbol", ""),
+        "company_name": st.session_state.get("nse_company_name", ""),
+        "filings": st.session_state.get("nse_filings_data", []),
+    },
+    {
+        "source": "India — BSE",
+        "identifier": st.session_state.get("bse_company_code", ""),
+        "company_name": st.session_state.get("bse_company_name", ""),
+        "filings": st.session_state.get("bse_filings_data", []),
+    },
+    {
+        "source": "United Kingdom — Companies House",
+        "identifier": st.session_state.get("uk_company_number", ""),
+        "company_name": st.session_state.get("uk_company_name", ""),
+        "filings": st.session_state.get("uk_filings_data", []),
+    },
+]
+
+global_filings_table = build_global_filings_table(global_filing_sources)
+
+if global_filings_table.empty:
+    st.info("Load filings from at least one registry to use this workspace.")
+else:
+    available_sources = sorted(global_filings_table["Source"].unique())
+    filing_year_values = pd.to_datetime(
+        global_filings_table["Filing date"], errors="coerce"
+    ).dt.year.dropna()
+    available_years = sorted(
+        filing_year_values.astype(int).unique().tolist(), reverse=True
+    )
+
+    global_filter_col, global_year_col = st.columns(2)
+    with global_filter_col:
+        selected_global_sources = st.multiselect(
+            "Filter global filing sources",
+            available_sources,
+            default=available_sources,
+        )
+    with global_year_col:
+        selected_global_year = st.selectbox(
+            "Filter global filing year",
+            ["All"] + available_years,
+        )
+
+    global_search = st.text_input(
+        "Search all loaded filings",
+        placeholder="Company, identifier, filing type, category or title",
+    )
+
+    filtered_global_filings = filter_global_filings(
+        global_filings_table,
+        sources=selected_global_sources,
+        year=(
+            None
+            if selected_global_year == "All"
+            else int(selected_global_year)
+        ),
+        search_text=global_search,
+    )
+
+    maximum_global_results = st.slider(
+        "Maximum global filings displayed",
+        min_value=10,
+        max_value=500,
+        value=100,
+        step=10,
+    )
+    displayed_global_filings = filtered_global_filings.head(
+        maximum_global_results
+    )
+
+    st.success(
+        f"{len(global_filings_table):,} filings loaded across "
+        f"{len(available_sources)} source(s). Displaying "
+        f"{len(displayed_global_filings):,} of "
+        f"{len(filtered_global_filings):,} matching filings."
+    )
+    st.dataframe(
+        displayed_global_filings,
+        hide_index=True,
+        width="stretch",
+        column_config={
+            "URL": st.column_config.LinkColumn(
+                "Official document",
+                display_text="Open filing",
+            )
+        },
+    )
