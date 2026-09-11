@@ -1,9 +1,16 @@
+import os
+
 import requests
+from dotenv import load_dotenv
 
 
-SEC_HEADERS = {
-    "User-Agent": "Financial Analysis Platform muskaankarnawat12@gmail.com"
-}
+load_dotenv()
+
+SEC_USER_AGENT = os.getenv(
+    "SEC_USER_AGENT",
+    "Financial Analysis Platform contact@example.com",
+)
+SEC_HEADERS = {"User-Agent": SEC_USER_AGENT}
 
 
 def get_sec_cik_from_ticker(ticker):
