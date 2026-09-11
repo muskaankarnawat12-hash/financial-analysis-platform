@@ -12,6 +12,7 @@ from sec_data import (
     get_sec_financial_facts,
 )
 from exports import create_excel_model, create_pdf_report
+from india_data import get_nse_company_filings
 from financial_model import (
     build_historical_analysis,
     calculate_dcf,
@@ -75,6 +76,9 @@ if "sec_historical_analysis" not in st.session_state:
 
 if "comparable_companies" not in st.session_state:
     st.session_state.comparable_companies = pd.DataFrame()
+
+if "company_snapshot" not in st.session_state:
+    st.session_state.company_snapshot = {}
 
 
 # ---------------------------------------------------------
@@ -183,6 +187,33 @@ with st.sidebar:
                 st.session_state.historical_revenue = (
                     company_data["historical_revenue"]
                 )
+                st.session_state.company_snapshot = {
+                    "ticker": company_data["ticker"],
+                    "company_name": company_data["company_name"],
+                    "currency": company_data["currency"],
+                    "current_price": company_data["current_price"],
+                    "market_cap": company_data["market_cap"],
+                    "enterprise_value": company_data[
+                        "enterprise_value"
+                    ],
+                    "trailing_pe": company_data["trailing_pe"],
+                    "fifty_two_week_high": company_data[
+                        "fifty_two_week_high"
+                    ],
+                    "fifty_two_week_low": company_data[
+                        "fifty_two_week_low"
+                    ],
+                    "dividend_yield": company_data["dividend_yield"],
+                    "beta": company_data["beta"],
+                    "sector": company_data["sector"],
+                    "industry": company_data["industry"],
+                    "country": company_data["country"],
+                    "website": company_data["website"],
+                    "employees": company_data["employees"],
+                    "business_summary": company_data[
+                        "business_summary"
+                    ],
+                }
 
                 st.success(
                     f"Loaded {company_data['company_name']}."
@@ -507,6 +538,167 @@ st.caption(
     f"{scenario} scenario | {currency} {units} | "
     f"Forecast beginning {int(first_forecast_year)}"
 )
+
+company_snapshot = st.session_state.get("company_snapshot", {})
+
+if company_snapshot.get("ticker") == ticker:
+    st.subheader("Company snapshot")
+
+    snapshot_currency = company_snapshot.get("currency") or currency
+    snapshot_price = company_snapshot.get("current_price")
+    snapshot_market_cap = company_snapshot.get("market_cap")
+    snapshot_pe = company_snapshot.get("trailing_pe")
+    snapshot_low = company_snapshot.get("fifty_two_week_low")
+    snapshot_high = company_snapshot.get("fifty_two_week_high")
+
+    def display_snapshot_item(column, label, value):
+        with column:
+            st.caption(label)
+            st.markdown(f"#### {value}")
+
+
+    snapshot_1, snapshot_2, snapshot_3, snapshot_4 = st.columns(4)
+
+    current_price_display = (
+        format_currency(float(snapshot_price), snapshot_currency)
+        if snapshot_price is not None
+        else "N/A"
+    )
+
+    market_cap_display = (
+        f"{snapshot_currency} "
+        f"{float(snapshot_market_cap) / 1_000_000_000:,.2f}B"
+        if snapshot_market_cap is not None
+        else "N/A"
+    )
+
+    pe_display = (
+        f"{float(snapshot_pe):.2f}x"
+        if snapshot_pe is not None
+        else "N/A"
+    )
+
+    range_display = (
+        f"{snapshot_currency} {float(snapshot_low):,.0f} – "
+        f"{float(snapshot_high):,.0f}"
+        if snapshot_low is not None and snapshot_high is not None
+        else "N/A"
+    )
+
+    display_snapshot_item(
+        snapshot_1,
+        "Current price",
+        current_price_display,
+    )
+    display_snapshot_item(
+        snapshot_2,
+        "Market capitalisation",
+        market_cap_display,
+    )
+    display_snapshot_item(
+        snapshot_3,
+        "Trailing P/E",
+        pe_display,
+    )
+    display_snapshot_item(
+        snapshot_4,
+        "52-week range",
+        range_display,
+    )
+
+
+    profile_1, profile_2, profile_3, profile_4 = st.columns(4)
+
+    employee_count = company_snapshot.get("employees")
+    employees_display = (
+        f"{int(employee_count):,}"
+        if employee_count
+        else "N/A"
+    )
+
+    display_snapshot_item(
+        profile_1,
+        "Sector",
+        company_snapshot.get("sector") or "N/A",
+    )
+    display_snapshot_item(
+        profile_2,
+        "Industry",
+        company_snapshot.get("industry") or "N/A",
+    )
+    display_snapshot_item(
+        profile_3,
+        "Country",
+        company_snapshot.get("country") or "N/A",
+    )
+    display_snapshot_item(
+        profile_4,
+        "Employees",
+        employees_display,
+    )
+
+
+    detail_1, detail_2, detail_3 = st.columns(3)
+
+    dividend_yield = company_snapshot.get("dividend_yield")
+    dividend_display = (
+        f"{float(dividend_yield):.2f}%"
+        if dividend_yield is not None
+        else "N/A"
+    )
+
+    beta = company_snapshot.get("beta")
+    beta_display = (
+        f"{float(beta):.2f}"
+        if beta is not None
+        else "N/A"
+    )
+
+    enterprise_value = company_snapshot.get("enterprise_value")
+    enterprise_value_display = (
+        f"{snapshot_currency} "
+        f"{float(enterprise_value) / 1_000_000_000:,.2f}B"
+        if enterprise_value is not None
+        else "N/A"
+    )
+
+    display_snapshot_item(
+        detail_1,
+        "Dividend yield",
+        dividend_display,
+    )
+    display_snapshot_item(
+        detail_2,
+        "Beta",
+        beta_display,
+    )
+    display_snapshot_item(
+        detail_3,
+        "Enterprise value",
+        enterprise_value_display,
+    )
+
+    website = company_snapshot.get("website")
+    business_summary = company_snapshot.get("business_summary")
+
+    with st.expander("Company profile"):
+        if business_summary:
+            st.write(business_summary)
+        else:
+            st.write("No company description was available.")
+
+        if website:
+            st.markdown(f"[Visit company website]({website})")
+
+    st.caption(
+        "Snapshot source: Yahoo Finance. Market information may be "
+        "delayed and should be verified before use."
+    )
+
+else:
+    st.info(
+        "Click 'Load company financials' to display the company snapshot."
+    )
 
 latest_forecast = forecast.iloc[-1]
 
@@ -1437,7 +1629,182 @@ with st.expander("Model methodology"):
 
 
 st.divider()
-st.header("Official SEC filings")
+st.header("Global regulatory filings")
+
+st.subheader("India — Official NSE filings")
+
+if "nse_filings_data" not in st.session_state:
+    st.session_state.nse_filings_data = []
+
+if "nse_company_name" not in st.session_state:
+    st.session_state.nse_company_name = ""
+
+if "nse_company_symbol" not in st.session_state:
+    st.session_state.nse_company_symbol = ""
+
+india_column_1, india_column_2 = st.columns([2, 1])
+
+with india_column_1:
+    nse_ticker = st.text_input(
+        "NSE company symbol",
+        value="RELIANCE",
+        help=(
+            "Enter an NSE symbol such as RELIANCE, TCS or INFY. "
+            "The .NS suffix is optional."
+        ),
+    ).strip().upper()
+
+with india_column_2:
+    nse_history_years = st.slider(
+        "NSE filing history (years)",
+        min_value=1,
+        max_value=20,
+        value=5,
+    )
+
+if st.button("Load official NSE filings"):
+    with st.spinner(
+        f"Retrieving NSE filings for {nse_ticker}..."
+    ):
+        try:
+            nse_company, nse_filings = get_nse_company_filings(
+                nse_ticker,
+                years=nse_history_years,
+            )
+
+            st.session_state.nse_filings_data = nse_filings
+            st.session_state.nse_company_name = nse_company
+            st.session_state.nse_company_symbol = (
+                nse_ticker.removesuffix(".NS")
+            )
+
+            if not nse_filings:
+                st.warning(
+                    "No NSE filings were returned for this symbol and "
+                    "date range. Check the symbol and try again."
+                )
+
+        except Exception as error:
+            st.error(
+                "Could not retrieve NSE filings. NSE may temporarily "
+                f"restrict automated requests. Details: {error}"
+            )
+            st.markdown(
+                "[Open the official NSE corporate-filings page]"
+                "(https://www.nseindia.com/companies-listing/"
+                "corporate-filings-announcements)"
+            )
+
+if st.session_state.nse_filings_data:
+    nse_filings = st.session_state.nse_filings_data
+    nse_filings_table = pd.DataFrame(nse_filings)
+    parsed_nse_dates = pd.to_datetime(
+        nse_filings_table["Filing date"],
+        errors="coerce",
+        dayfirst=True,
+    )
+    nse_filings_table["Year"] = parsed_nse_dates.dt.year.astype(
+        "Int64"
+    )
+
+    st.success(
+        f"{len(nse_filings):,} official NSE filings loaded for "
+        f"{st.session_state.nse_company_name} "
+        f"({st.session_state.nse_company_symbol})."
+    )
+
+    nse_categories = sorted(
+        nse_filings_table["Category"].dropna().unique().tolist()
+    )
+    nse_years = sorted(
+        nse_filings_table["Year"].dropna().astype(int).unique().tolist(),
+        reverse=True,
+    )
+
+    nse_filter_1, nse_filter_2 = st.columns(2)
+
+    with nse_filter_1:
+        selected_nse_categories = st.multiselect(
+            "Filter NSE filing categories",
+            options=nse_categories,
+            help="Leave empty to display every category.",
+        )
+
+    with nse_filter_2:
+        selected_nse_year = st.selectbox(
+            "Filter NSE filing year",
+            options=["All years", *nse_years],
+        )
+
+    nse_search = st.text_input(
+        "Search NSE filings",
+        placeholder="Example: annual report, results or dividend",
+    ).strip().lower()
+
+    filtered_nse_filings = nse_filings_table.copy()
+
+    if selected_nse_categories:
+        filtered_nse_filings = filtered_nse_filings[
+            filtered_nse_filings["Category"].isin(
+                selected_nse_categories
+            )
+        ]
+
+    if selected_nse_year != "All years":
+        filtered_nse_filings = filtered_nse_filings[
+            filtered_nse_filings["Year"] == selected_nse_year
+        ]
+
+    if nse_search:
+        searchable_nse_text = (
+            filtered_nse_filings["Category"].fillna("")
+            + " "
+            + filtered_nse_filings["Title"].fillna("")
+        ).str.lower()
+        filtered_nse_filings = filtered_nse_filings[
+            searchable_nse_text.str.contains(
+                nse_search,
+                regex=False,
+            )
+        ]
+
+    maximum_nse_results = st.slider(
+        "Maximum NSE filings displayed",
+        min_value=10,
+        max_value=500,
+        value=50,
+        step=10,
+    )
+
+    displayed_nse_filings = filtered_nse_filings.head(
+        maximum_nse_results
+    )
+
+    st.info(
+        f"Displaying {len(displayed_nse_filings):,} of "
+        f"{len(filtered_nse_filings):,} matching NSE filings."
+    )
+
+    st.dataframe(
+        displayed_nse_filings.drop(columns=["Year"]),
+        hide_index=True,
+        width="stretch",
+        column_config={
+            "URL": st.column_config.LinkColumn(
+                "Official NSE document",
+                display_text="Open filing",
+            )
+        },
+    )
+
+    st.caption(
+        "Source: National Stock Exchange of India. Filing availability "
+        "and metadata are controlled by the exchange."
+    )
+
+
+st.divider()
+st.subheader("United States — Official SEC filings")
 
 if "sec_filings_data" not in st.session_state:
     st.session_state.sec_filings_data = []
