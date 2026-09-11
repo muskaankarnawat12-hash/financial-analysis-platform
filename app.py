@@ -13,7 +13,7 @@ from sec_data import (
 )
 from exports import create_excel_model, create_pdf_report
 from india_data import get_bse_company_filings, get_nse_company_filings
-from uk_data import get_uk_company_filings
+from uk_data import get_uk_company_filings, get_uk_financial_facts
 from global_filings import build_global_filings_table, filter_global_filings
 from financial_model import (
     build_historical_analysis,
@@ -277,9 +277,128 @@ with st.sidebar:
 
     st.divider()
 
-    if st.button("Use SEC actuals as model inputs"):
+    loaded_ticker_for_source = st.session_state.loaded_ticker.upper()
+    default_actuals_source = (
+        "India — NSE/BSE"
+        if loaded_ticker_for_source.endswith((".NS", ".BO"))
+        else "United States — SEC"
+    )
+    official_actuals_sources = [
+        "United States — SEC",
+        "India — NSE/BSE",
+        "United Kingdom — Companies House",
+    ]
+    official_actuals_source = st.selectbox(
+        "Official actuals source",
+        official_actuals_sources,
+        index=official_actuals_sources.index(default_actuals_source),
+        help=(
+            "SEC structured actuals are available now. India and UK "
+            "structured-account extraction will be added next."
+        ),
+    )
+
+    apply_official_actuals = st.button(
+        "Use official filing actuals as model inputs"
+    )
+
+    if apply_official_actuals and official_actuals_source == "India — NSE/BSE":
+        st.warning(
+            "Structured financial actuals for India are not "
+            "connected yet. Existing model inputs were preserved, and "
+            "missing filing values were not treated as zero."
+        )
+
+    if (
+        apply_official_actuals
+        and official_actuals_source == "United Kingdom — Companies House"
+    ):
+        try:
+            uk_model_company_number = st.session_state.get(
+                "uk_company_number", ""
+            )
+            if not uk_model_company_number:
+                raise ValueError(
+                    "Load UK filings below first so the Companies House "
+                    "company number is available."
+                )
+
+            uk_model_data = get_uk_financial_facts(
+                uk_model_company_number
+            )
+            uk_metrics = uk_model_data["Financial Data"]
+            uk_revenue_records = uk_metrics.get("Revenue", [])
+            uk_cash_records = uk_metrics.get("Cash", [])
+            uk_debt_records = uk_metrics.get("Long-Term Debt", [])
+            uk_applied_metrics = []
+
+            if (
+                uk_revenue_records
+                and uk_revenue_records[0].get("Value") is not None
+            ):
+                st.session_state.starting_revenue = (
+                    uk_revenue_records[0]["Value"] / 1_000_000
+                )
+                uk_applied_metrics.append("revenue")
+
+                ordered_uk_revenue = sorted(
+                    uk_revenue_records,
+                    key=lambda record: record["Period"],
+                )[-4:]
+                if len(ordered_uk_revenue) >= 2:
+                    beginning_uk_revenue = ordered_uk_revenue[0]["Value"]
+                    ending_uk_revenue = ordered_uk_revenue[-1]["Value"]
+                    uk_growth_periods = len(ordered_uk_revenue) - 1
+                    if beginning_uk_revenue > 0 and ending_uk_revenue >= 0:
+                        uk_historical_cagr = (
+                            ending_uk_revenue / beginning_uk_revenue
+                        ) ** (1 / uk_growth_periods) - 1
+                        st.session_state.revenue_growth_input = max(
+                            -20.0,
+                            min(50.0, uk_historical_cagr * 100),
+                        )
+
+            if (
+                uk_cash_records
+                and uk_cash_records[0].get("Value") is not None
+            ):
+                st.session_state.cash = (
+                    uk_cash_records[0]["Value"] / 1_000_000
+                )
+                uk_applied_metrics.append("cash")
+
+            if (
+                uk_debt_records
+                and uk_debt_records[0].get("Value") is not None
+            ):
+                st.session_state.debt = (
+                    uk_debt_records[0]["Value"] / 1_000_000
+                )
+                uk_applied_metrics.append("debt")
+
+            if not uk_applied_metrics:
+                raise ValueError(
+                    "No supported UK account values were available. "
+                    "Existing model inputs were preserved."
+                )
+
+            st.session_state.currency = "GBP"
+            st.success(
+                "Companies House actuals applied in GBP millions. Updated: "
+                + ", ".join(uk_applied_metrics)
+                + ". Unavailable values were preserved, not set to zero."
+            )
+
+        except Exception as error:
+            st.error(f"Could not apply UK actuals: {error}")
+
+    if apply_official_actuals and official_actuals_source == "United States — SEC":
         try:
             model_ticker = st.session_state.loaded_ticker
+            if model_ticker.upper().endswith((".NS", ".BO")):
+                raise ValueError(
+                    "Select a US ticker before applying SEC actuals."
+                )
             model_cik = get_sec_cik_from_ticker(model_ticker)
             model_sec_data = get_sec_financial_facts(model_cik)
 
@@ -356,24 +475,37 @@ with st.sidebar:
                         min(60.0, average_ebitda_margin * 100),
                     )
 
-            if revenue_records:
+            applied_metrics = []
+
+            if revenue_records and revenue_records[0].get("Value") is not None:
                 st.session_state.starting_revenue = (
                     revenue_records[0]["Value"] / 1_000_000
                 )
+                applied_metrics.append("revenue")
 
-            if cash_records:
+            if cash_records and cash_records[0].get("Value") is not None:
                 st.session_state.cash = (
                     cash_records[0]["Value"] / 1_000_000
                 )
+                applied_metrics.append("cash")
 
-            if debt_records:
+            if debt_records and debt_records[0].get("Value") is not None:
                 st.session_state.debt = (
                     debt_records[0]["Value"] / 1_000_000
                 )
+                applied_metrics.append("debt")
 
+            if not applied_metrics:
+                raise ValueError(
+                    "No supported SEC values were available. Existing "
+                    "model inputs were preserved."
+                )
+
+            st.session_state.currency = "USD"
             st.success(
-                "SEC actuals applied in USD millions. "
-                "Revenue, cash and debt inputs were updated."
+                "SEC actuals applied in USD millions. Updated: "
+                + ", ".join(applied_metrics)
+                + ". Unavailable values were preserved, not set to zero."
             )
 
         except Exception as error:
@@ -916,7 +1048,7 @@ if isinstance(sec_history, pd.DataFrame) and not sec_history.empty:
 
 else:
     st.info(
-        "Click 'Use SEC actuals as model inputs' in the sidebar "
+        "Click 'Use official filing actuals as model inputs' in the sidebar "
         "to build the Actual vs Forecast comparison."
     )
 

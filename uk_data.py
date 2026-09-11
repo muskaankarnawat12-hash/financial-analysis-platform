@@ -3,6 +3,8 @@
 import os
 import re
 from datetime import date
+from decimal import Decimal, InvalidOperation
+from xml.etree import ElementTree
 
 import requests
 from dotenv import load_dotenv
@@ -13,6 +15,9 @@ load_dotenv()
 COMPANIES_HOUSE_API = "https://api.company-information.service.gov.uk"
 COMPANIES_HOUSE_WEB = (
     "https://find-and-update.company-information.service.gov.uk"
+)
+COMPANIES_HOUSE_DOCUMENT_API = (
+    "https://document-api.company-information.service.gov.uk"
 )
 
 
@@ -64,6 +69,28 @@ def _request(path: str, parameters: dict | None = None) -> dict:
 
     response.raise_for_status()
     return response.json()
+
+
+def _document_request(
+    path: str,
+    accept: str = "application/json",
+) -> requests.Response:
+    """Request metadata or content from the Companies House Document API."""
+
+    response = requests.get(
+        f"{COMPANIES_HOUSE_DOCUMENT_API}{path}",
+        auth=(_get_api_key(), ""),
+        headers={"Accept": accept},
+        timeout=45,
+    )
+
+    if response.status_code == 401:
+        raise ValueError(
+            "The Companies House API key was rejected by the Document API."
+        )
+
+    response.raise_for_status()
+    return response
 
 
 def _filing_title(filing: dict) -> str:
@@ -118,6 +145,10 @@ def get_uk_company_filings(
                 continue
 
             transaction_id = str(filing.get("transaction_id") or "")
+            document_link = str(
+                (filing.get("links") or {}).get("document_metadata") or ""
+            )
+            document_id = document_link.rstrip("/").split("/")[-1]
             document_url = ""
 
             if transaction_id:
@@ -135,6 +166,7 @@ def get_uk_company_filings(
                     "Type": str(filing.get("type") or ""),
                     "Title": _filing_title(filing),
                     "Filing date": filing_date,
+                    "Document ID": document_id,
                     "URL": document_url,
                 }
             )
@@ -152,3 +184,188 @@ def get_uk_company_filings(
 
     filings.sort(key=lambda filing: filing["Filing date"], reverse=True)
     return company_name, filings
+
+
+def _local_name(tag: str) -> str:
+    """Return an XML tag name without its namespace."""
+
+    return tag.rsplit("}", 1)[-1].lower()
+
+
+def _normalise_concept(value: str) -> str:
+    """Normalise an XBRL concept name for resilient matching."""
+
+    return re.sub(r"[^a-z0-9]", "", value.split(":")[-1].lower())
+
+
+def _parse_number(element: ElementTree.Element) -> float | None:
+    """Parse an inline-XBRL numeric fact, including sign and scale."""
+
+    if str(element.attrib.get("nil", "")).lower() == "true":
+        return None
+
+    text = "".join(element.itertext()).strip()
+    text = text.replace(",", "").replace("£", "").replace(" ", "")
+    if not text or text in {"-", "—"}:
+        return None
+
+    negative = text.startswith("(") and text.endswith(")")
+    if negative:
+        text = text[1:-1]
+
+    try:
+        value = Decimal(text)
+        scale = int(element.attrib.get("scale", "0") or 0)
+        value *= Decimal(10) ** scale
+        if negative or element.attrib.get("sign") == "-":
+            value = -abs(value)
+        return float(value)
+    except (InvalidOperation, ValueError):
+        return None
+
+
+def _context_periods(root: ElementTree.Element) -> dict[str, str]:
+    """Map XBRL context identifiers to their reporting-period end date."""
+
+    periods = {}
+    for element in root.iter():
+        if _local_name(element.tag) != "context":
+            continue
+
+        context_id = element.attrib.get("id", "")
+        period_end = ""
+        for child in element.iter():
+            if _local_name(child.tag) in {"enddate", "instant"}:
+                period_end = (child.text or "").strip()
+                if period_end:
+                    break
+
+        if context_id and period_end:
+            periods[context_id] = period_end
+
+    return periods
+
+
+def _extract_uk_xbrl_facts(content: bytes) -> dict[str, list[dict]]:
+    """Extract supported model metrics from UK inline-XBRL/XML accounts."""
+
+    try:
+        root = ElementTree.fromstring(content)
+    except ElementTree.ParseError as error:
+        raise ValueError(
+            "The Companies House accounts document could not be parsed."
+        ) from error
+
+    concept_groups = {
+        "Revenue": {
+            "turnoverrevenue",
+            "turnovergrossoperatingrevenue",
+            "revenue",
+        },
+        "Cash": {
+            "cashbankonhand",
+            "cashandcashequivalents",
+            "cashandcash equivalents",
+        },
+        "Long-Term Debt": {
+            "creditorsamountsfallingdueaftermorethanoneyear",
+            "longtermborrowings",
+            "noncurrentborrowings",
+            "bankborrowingsnoncurrent",
+        },
+    }
+    concept_groups["Cash"] = {
+        _normalise_concept(value) for value in concept_groups["Cash"]
+    }
+    periods = _context_periods(root)
+    extracted = {metric: {} for metric in concept_groups}
+
+    for element in root.iter():
+        concept_name = (
+            element.attrib.get("name")
+            or element.attrib.get("concept")
+            or _local_name(element.tag)
+        )
+        concept = _normalise_concept(concept_name)
+        context_id = (
+            element.attrib.get("contextRef")
+            or element.attrib.get("contextref")
+            or ""
+        )
+        period = periods.get(context_id, "")
+        if not period:
+            continue
+
+        value = _parse_number(element)
+        if value is None:
+            continue
+
+        for metric, supported_concepts in concept_groups.items():
+            if concept in supported_concepts and period not in extracted[metric]:
+                extracted[metric][period] = {
+                    "Period": period,
+                    "Value": value,
+                    "Form": "Companies House accounts",
+                    "Filed": "",
+                    "Accession": "",
+                }
+
+    return {
+        metric: sorted(records.values(), key=lambda item: item["Period"], reverse=True)
+        for metric, records in extracted.items()
+    }
+
+
+def get_uk_financial_facts(company_number: str) -> dict:
+    """Retrieve machine-readable Companies House accounts for model inputs."""
+
+    cleaned_number = clean_uk_company_number(company_number)
+    profile = _request(f"/company/{cleaned_number}")
+    company_name = profile.get("company_name") or cleaned_number
+    payload = _request(
+        f"/company/{cleaned_number}/filing-history",
+        {"category": "accounts", "items_per_page": 100},
+    )
+
+    for filing in payload.get("items") or []:
+        document_link = str(
+            (filing.get("links") or {}).get("document_metadata") or ""
+        )
+        document_id = document_link.rstrip("/").split("/")[-1]
+        if not document_id:
+            continue
+
+        metadata = _document_request(f"/document/{document_id}").json()
+        resources = metadata.get("resources") or {}
+        available_types = [
+            content_type
+            for content_type in ("application/xhtml+xml", "application/xml")
+            if content_type in resources
+        ]
+        if not available_types:
+            continue
+
+        content_type = available_types[0]
+        document = _document_request(
+            f"/document/{document_id}/content",
+            accept=content_type,
+        )
+        financial_data = _extract_uk_xbrl_facts(document.content)
+
+        if any(financial_data.values()):
+            filed_date = str(filing.get("date") or "")
+            for records in financial_data.values():
+                for record in records:
+                    record["Filed"] = filed_date
+
+            return {
+                "Company": company_name,
+                "Company number": cleaned_number,
+                "Currency": "GBP",
+                "Financial Data": financial_data,
+            }
+
+    raise ValueError(
+        "No machine-readable UK accounts with supported revenue, cash or "
+        "long-term debt values were available for this company."
+    )
