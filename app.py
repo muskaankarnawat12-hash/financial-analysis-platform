@@ -12,7 +12,7 @@ from sec_data import (
     get_sec_financial_facts,
 )
 from exports import create_excel_model, create_pdf_report
-from india_data import get_nse_company_filings
+from india_data import get_bse_company_filings, get_nse_company_filings
 from financial_model import (
     build_historical_analysis,
     calculate_dcf,
@@ -1800,6 +1800,174 @@ if st.session_state.nse_filings_data:
     st.caption(
         "Source: National Stock Exchange of India. Filing availability "
         "and metadata are controlled by the exchange."
+    )
+
+
+st.subheader("India — Official BSE filings")
+
+if "bse_filings_data" not in st.session_state:
+    st.session_state.bse_filings_data = []
+
+if "bse_company_name" not in st.session_state:
+    st.session_state.bse_company_name = ""
+
+if "bse_company_code" not in st.session_state:
+    st.session_state.bse_company_code = ""
+
+bse_column_1, bse_column_2 = st.columns([2, 1])
+
+with bse_column_1:
+    bse_scrip_code = st.text_input(
+        "BSE scrip code",
+        value="500325",
+        help=(
+            "Enter a six-digit BSE code. Examples: "
+            "500325 for Reliance Industries or 532540 for TCS."
+        ),
+    ).strip()
+
+with bse_column_2:
+    bse_history_years = st.slider(
+        "BSE filing history (years)",
+        min_value=1,
+        max_value=20,
+        value=5,
+    )
+
+if st.button("Load official BSE filings"):
+    with st.spinner(
+        f"Retrieving BSE filings for {bse_scrip_code}..."
+    ):
+        try:
+            bse_company, bse_filings = get_bse_company_filings(
+                bse_scrip_code,
+                years=bse_history_years,
+            )
+
+            st.session_state.bse_filings_data = bse_filings
+            st.session_state.bse_company_name = bse_company
+            st.session_state.bse_company_code = bse_scrip_code
+
+            if not bse_filings:
+                st.warning(
+                    "No BSE filings were returned for this scrip code "
+                    "and date range. Check the code and try again."
+                )
+
+        except Exception as error:
+            st.error(
+                "Could not retrieve BSE filings. BSE may temporarily "
+                f"restrict automated requests. Details: {error}"
+            )
+            st.markdown(
+                "[Open the official BSE corporate-announcements page]"
+                "(https://www.bseindia.com/corporates/ann.html)"
+            )
+
+if st.session_state.bse_filings_data:
+    bse_filings_table = pd.DataFrame(
+        st.session_state.bse_filings_data
+    )
+    parsed_bse_dates = pd.to_datetime(
+        bse_filings_table["Filing date"],
+        errors="coerce",
+    )
+    bse_filings_table["Year"] = parsed_bse_dates.dt.year.astype(
+        "Int64"
+    )
+
+    st.success(
+        f"{len(bse_filings_table):,} official BSE filings loaded for "
+        f"{st.session_state.bse_company_name} "
+        f"({st.session_state.bse_company_code})."
+    )
+
+    bse_categories = sorted(
+        bse_filings_table["Category"].dropna().unique().tolist()
+    )
+    bse_years = sorted(
+        bse_filings_table["Year"].dropna().astype(int).unique().tolist(),
+        reverse=True,
+    )
+
+    bse_filter_1, bse_filter_2 = st.columns(2)
+
+    with bse_filter_1:
+        selected_bse_categories = st.multiselect(
+            "Filter BSE filing categories",
+            options=bse_categories,
+            help="Leave empty to display every category.",
+        )
+
+    with bse_filter_2:
+        selected_bse_year = st.selectbox(
+            "Filter BSE filing year",
+            options=["All years", *bse_years],
+        )
+
+    bse_search = st.text_input(
+        "Search BSE filings",
+        placeholder="Example: annual report, results or dividend",
+    ).strip().lower()
+
+    filtered_bse_filings = bse_filings_table.copy()
+
+    if selected_bse_categories:
+        filtered_bse_filings = filtered_bse_filings[
+            filtered_bse_filings["Category"].isin(
+                selected_bse_categories
+            )
+        ]
+
+    if selected_bse_year != "All years":
+        filtered_bse_filings = filtered_bse_filings[
+            filtered_bse_filings["Year"] == selected_bse_year
+        ]
+
+    if bse_search:
+        searchable_bse_text = (
+            filtered_bse_filings["Category"].fillna("")
+            + " "
+            + filtered_bse_filings["Title"].fillna("")
+        ).str.lower()
+        filtered_bse_filings = filtered_bse_filings[
+            searchable_bse_text.str.contains(
+                bse_search,
+                regex=False,
+            )
+        ]
+
+    maximum_bse_results = st.slider(
+        "Maximum BSE filings displayed",
+        min_value=10,
+        max_value=500,
+        value=50,
+        step=10,
+    )
+    displayed_bse_filings = filtered_bse_filings.head(
+        maximum_bse_results
+    )
+
+    st.info(
+        f"Displaying {len(displayed_bse_filings):,} of "
+        f"{len(filtered_bse_filings):,} matching BSE filings."
+    )
+
+    st.dataframe(
+        displayed_bse_filings.drop(columns=["Year"]),
+        hide_index=True,
+        width="stretch",
+        column_config={
+            "URL": st.column_config.LinkColumn(
+                "Official BSE document",
+                display_text="Open filing",
+            )
+        },
+    )
+
+    st.caption(
+        "Source: BSE Limited. Filing availability and metadata are "
+        "controlled by the exchange."
     )
 
 

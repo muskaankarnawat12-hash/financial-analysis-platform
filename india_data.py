@@ -10,6 +10,10 @@ NSE_HOME = "https://www.nseindia.com"
 NSE_ANNOUNCEMENTS_API = (
     "https://www.nseindia.com/api/corporate-announcements"
 )
+BSE_ANNOUNCEMENTS_API = (
+    "https://api.bseindia.com/BseIndiaAPI/api/"
+    "AnnSubCategoryGetData/w"
+)
 NSE_HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -22,6 +26,13 @@ NSE_HEADERS = {
         "https://www.nseindia.com/companies-listing/"
         "corporate-filings-announcements"
     ),
+}
+BSE_HEADERS = {
+    "User-Agent": NSE_HEADERS["User-Agent"],
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Origin": "https://www.bseindia.com",
+    "Referer": "https://www.bseindia.com/",
 }
 
 
@@ -190,6 +201,165 @@ def get_nse_company_filings(
             if filing["Company"]
         ),
         symbol,
+    )
+
+    return company_name, filings
+
+
+def clean_bse_scrip_code(scrip_code: str) -> str:
+    """Validate and return a six-digit BSE scrip code."""
+
+    cleaned_code = str(scrip_code).strip()
+
+    if not cleaned_code.isdigit() or len(cleaned_code) != 6:
+        raise ValueError(
+            "Enter a valid six-digit BSE scrip code, such as 500325."
+        )
+
+    return cleaned_code
+
+
+def _normalise_bse_filing(record: dict, scrip_code: str) -> dict:
+    """Convert a BSE announcement into the platform filing schema."""
+
+    attachment = (
+        record.get("NSURL")
+        or record.get("ATTACHMENTNAME")
+        or record.get("AttachmentName")
+        or ""
+    )
+
+    if attachment and not attachment.startswith(("http://", "https://")):
+        attachment = urljoin(
+            "https://www.bseindia.com/xml-data/corpfiling/AttachLive/",
+            attachment,
+        )
+
+    category = (
+        record.get("CATEGORYNAME")
+        or record.get("ANNOUNCEMENT_TYPE")
+        or record.get("HEADLINE")
+        or "Corporate announcement"
+    )
+    title = (
+        record.get("NEWSSUB")
+        or record.get("SUBJECT")
+        or record.get("HEADLINE")
+        or category
+    )
+    filing_date = (
+        record.get("NEWS_DT")
+        or record.get("DT_TM")
+        or record.get("DissemDT")
+        or ""
+    )
+
+    return {
+        "Exchange": "BSE India",
+        "Scrip code": str(record.get("SCRIP_CD") or scrip_code),
+        "Company": (
+            record.get("SLONGNAME")
+            or record.get("SCRIP_NAME")
+            or ""
+        ),
+        "Category": str(category),
+        "Title": str(title),
+        "Filing date": _normalise_date(filing_date),
+        "URL": attachment,
+    }
+
+
+def get_bse_company_filings(
+    scrip_code: str,
+    years: int = 5,
+) -> tuple[str, list[dict]]:
+    """Retrieve current and historical BSE corporate announcements."""
+
+    cleaned_code = clean_bse_scrip_code(scrip_code)
+    years = max(1, min(int(years), 20))
+    session = requests.Session()
+    session.headers.update(BSE_HEADERS)
+    filings = []
+    seen_filings = set()
+
+    period_end = date.today()
+    earliest_date = period_end - timedelta(days=365 * years)
+
+    while period_end > earliest_date:
+        period_start = max(
+            earliest_date,
+            period_end - timedelta(days=364),
+        )
+        page_number = 1
+
+        while page_number <= 100:
+            parameters = {
+                "pageno": page_number,
+                "strCat": -1,
+                "strPrevDate": period_start.strftime("%Y%m%d"),
+                "strScrip": cleaned_code,
+                "strSearch": "P",
+                "strToDate": period_end.strftime("%Y%m%d"),
+                "strType": "C",
+                "subcategory": -1,
+            }
+
+            response = session.get(
+                BSE_ANNOUNCEMENTS_API,
+                params=parameters,
+                timeout=45,
+            )
+            response.raise_for_status()
+            payload = response.json()
+
+            if isinstance(payload, dict):
+                records = payload.get("Table", payload.get("data", []))
+            else:
+                records = payload
+
+            if not records:
+                break
+
+            for record in records:
+                filing = _normalise_bse_filing(record, cleaned_code)
+                unique_key = (
+                    filing["URL"],
+                    filing["Filing date"],
+                    filing["Title"],
+                )
+
+                if unique_key not in seen_filings:
+                    seen_filings.add(unique_key)
+                    filings.append(filing)
+
+            total_pages = page_number
+            if isinstance(payload, dict) and payload.get("Table1"):
+                page_details = payload["Table1"][0]
+                total_pages = int(
+                    page_details.get("TotalPageCnt")
+                    or page_details.get("TOTAL_PAGE_COUNT")
+                    or page_number
+                )
+
+            if page_number >= total_pages:
+                break
+
+            page_number += 1
+
+        period_end = period_start - timedelta(days=1)
+
+    filings.sort(
+        key=lambda filing: filing["Filing date"],
+        reverse=True,
+    )
+
+    company_name = next(
+        (
+            filing["Company"]
+            for filing in filings
+            if filing["Company"]
+        ),
+        cleaned_code,
     )
 
     return company_name, filings
