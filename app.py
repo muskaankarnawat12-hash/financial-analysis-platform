@@ -5,7 +5,11 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from ai_analysis import generate_rule_based_analysis
-from data_sources import get_comparable_companies, get_company_data
+from data_sources import (
+    get_automatic_peer_tickers,
+    get_comparable_companies,
+    get_company_data,
+)
 from sec_data import (
     get_sec_cik_from_ticker,
     get_sec_company_filings,
@@ -85,6 +89,9 @@ if "sec_historical_analysis" not in st.session_state:
 
 if "comparable_companies" not in st.session_state:
     st.session_state.comparable_companies = pd.DataFrame()
+
+if "suggested_peer_tickers" not in st.session_state:
+    st.session_state.suggested_peer_tickers = []
 
 if "company_snapshot" not in st.session_state:
     st.session_state.company_snapshot = {}
@@ -269,6 +276,8 @@ with st.sidebar:
                         "market_data_date"
                     ),
                 }
+                st.session_state.suggested_peer_tickers = []
+                st.session_state.comparable_companies = pd.DataFrame()
                 st.session_state.input_audit_metadata = company_data.get(
                     "audit_metadata", {}
                 )
@@ -1981,14 +1990,15 @@ else:
 st.subheader("Comparable companies")
 
 st.caption(
-    "Compare the selected company with listed peers. "
-    "Enter Yahoo Finance ticker symbols separated by commas."
+    "Load a same-market, same-industry peer set automatically. You can "
+    "still replace the suggested list before loading if needed."
 )
 
 peer_tickers_text = st.text_input(
-    "Peer tickers",
-    value="MSFT, GOOGL, AMZN, META",
-    help="Examples: MSFT, GOOGL, AMZN, META",
+    "Optional peer ticker override",
+    value=", ".join(st.session_state.get("suggested_peer_tickers", [])),
+    placeholder="Leave blank to use automatic peer suggestions",
+    help="Optional. Leave this blank and the app will suggest listed peers automatically.",
 )
 
 if st.button("Load comparable companies"):
@@ -1998,42 +2008,64 @@ if st.button("Load comparable companies"):
         if peer.strip()
     ]
 
+    if not peer_tickers:
+        company_snapshot = st.session_state.get("company_snapshot", {})
+        with st.spinner("Finding comparable companies in the same market and industry..."):
+            peer_tickers = get_automatic_peer_tickers(
+                ticker=st.session_state.get("loaded_ticker", ticker),
+                sector=company_snapshot.get("sector"),
+                industry=company_snapshot.get("industry"),
+                country=company_snapshot.get("country"),
+            )
+        st.session_state.suggested_peer_tickers = peer_tickers
+
+    if not peer_tickers:
+        st.warning(
+            "No automatic peers were available for this company. Enter "
+            "peer tickers manually to continue."
+        )
+        peer_tickers = []
+
     comparison_tickers = [ticker, *peer_tickers]
 
-    with st.spinner("Loading comparable-company data..."):
-        try:
-            comparable_companies = get_comparable_companies(
-                comparison_tickers
-            )
-            comparable_companies.insert(
-                0,
-                "Role",
-                comparable_companies["Ticker"].apply(
-                    lambda peer: (
-                        "Selected company"
-                        if peer == ticker
-                        else "Peer"
-                    )
-                ),
-            )
+    if peer_tickers:
+        st.caption("Suggested peers: " + ", ".join(peer_tickers))
 
-            st.session_state.comparable_companies = (
-                comparable_companies
-            )
-
-            failed_tickers = comparable_companies.attrs.get(
-                "failed_tickers",
-                [],
-            )
-
-            if failed_tickers:
-                st.warning(
-                    "No data was returned for: "
-                    + ", ".join(failed_tickers)
+    if peer_tickers:
+        with st.spinner("Loading comparable-company data..."):
+            try:
+                comparable_companies = get_comparable_companies(
+                    comparison_tickers
+                )
+                comparable_companies.insert(
+                    0,
+                    "Role",
+                    comparable_companies["Ticker"].apply(
+                        lambda peer: (
+                            "Selected company"
+                            if peer == ticker
+                            else "Peer"
+                        )
+                    ),
                 )
 
-        except ValueError as error:
-            st.error(str(error))
+                st.session_state.comparable_companies = (
+                    comparable_companies
+                )
+
+                failed_tickers = comparable_companies.attrs.get(
+                    "failed_tickers",
+                    [],
+                )
+
+                if failed_tickers:
+                    st.warning(
+                        "No data was returned for: "
+                        + ", ".join(failed_tickers)
+                    )
+
+            except ValueError as error:
+                st.error(str(error))
 
 comparable_companies = st.session_state.get(
     "comparable_companies",

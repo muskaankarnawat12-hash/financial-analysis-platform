@@ -7,6 +7,94 @@ import pandas as pd
 import yfinance as yf
 
 
+MARKET_PEER_FALLBACKS = {
+    "RELIANCE.NS": ["ONGC.NS", "IOC.NS", "BPCL.NS", "HINDPETRO.NS", "GAIL.NS"],
+    "TCS.NS": ["INFY.NS", "HCLTECH.NS", "WIPRO.NS", "TECHM.NS", "LTIM.NS"],
+    "500325.BO": ["ONGC.NS", "IOC.NS", "BPCL.NS", "HINDPETRO.NS", "GAIL.NS"],
+    "AAPL": ["MSFT", "GOOGL", "DELL", "HPQ", "SONY"],
+    "TSCO.L": ["SBRY.L", "MRW.L", "B&M.L", "OCDO.L", "CPG.L"],
+}
+
+
+def _peer_region(ticker: str, country: str | None) -> str:
+    """Return the Yahoo screener region best suited to the listed ticker."""
+
+    ticker = ticker.upper()
+    if ticker.endswith((".NS", ".BO")):
+        return "in"
+    if ticker.endswith(".L"):
+        return "gb"
+    if str(country or "").lower() in {"united kingdom", "uk"}:
+        return "gb"
+    return "us"
+
+
+def get_automatic_peer_tickers(
+    ticker: str,
+    sector: str | None = None,
+    industry: str | None = None,
+    country: str | None = None,
+    maximum_peers: int = 5,
+) -> list[str]:
+    """Suggest listed peers from the same market and Yahoo industry data.
+
+    Yahoo's screener availability differs by market, so a small, transparent
+    fallback list is used for supported widely followed companies when the
+    screener cannot return enough matching listings.
+    """
+
+    cleaned_ticker = ticker.strip().upper()
+    maximum_peers = max(3, min(int(maximum_peers), 10))
+    candidates: list[str] = []
+
+    try:
+        equity_query = getattr(yf, "EquityQuery", None)
+        screener = getattr(yf, "screen", None)
+        if equity_query is not None and screener is not None:
+            filters = [
+                equity_query("eq", ["region", _peer_region(cleaned_ticker, country)]),
+                equity_query("gt", ["intradaymarketcap", 500_000_000]),
+            ]
+            query = equity_query("and", filters)
+            results = screener(
+                query,
+                size=50,
+                sortField="intradaymarketcap",
+                sortAsc=False,
+            )
+            quotes = results.get("quotes", []) if isinstance(results, dict) else []
+            target_industry = str(industry or "").strip().lower()
+            target_sector = str(sector or "").strip().lower()
+
+            for quote in quotes:
+                symbol = str(quote.get("symbol", "")).upper()
+                quote_industry = str(quote.get("industry", "")).lower()
+                quote_sector = str(quote.get("sector", "")).lower()
+                if not symbol or symbol == cleaned_ticker:
+                    continue
+                if target_industry and quote_industry == target_industry:
+                    candidates.append(symbol)
+                elif not target_industry and target_sector and quote_sector == target_sector:
+                    candidates.append(symbol)
+                if len(candidates) >= maximum_peers:
+                    break
+    except Exception:
+        # The fallback below keeps peer loading available if Yahoo's screener
+        # blocks a market or changes its response format.
+        candidates = []
+
+    if len(candidates) < 3:
+        candidates.extend(MARKET_PEER_FALLBACKS.get(cleaned_ticker, []))
+
+    return list(
+        dict.fromkeys(
+            candidate
+            for candidate in candidates
+            if candidate and candidate != cleaned_ticker
+        )
+    )[:maximum_peers]
+
+
 def find_latest_value(
     statement: pd.DataFrame,
     possible_names: list[str],
