@@ -12,7 +12,11 @@ from sec_data import (
     get_sec_financial_facts,
 )
 from exports import create_excel_model, create_pdf_report
-from india_data import get_bse_company_filings, get_nse_company_filings
+from india_data import (
+    get_bse_company_filings,
+    get_india_actuals_evidence,
+    get_nse_company_filings,
+)
 from uk_data import (
     get_uk_company_filings,
     get_uk_financial_facts,
@@ -94,6 +98,9 @@ if "input_audit_metadata" not in st.session_state:
 if "loaded_input_baseline" not in st.session_state:
     st.session_state.loaded_input_baseline = {}
 
+if "india_actuals_evidence" not in st.session_state:
+    st.session_state.india_actuals_evidence = {}
+
 
 # ---------------------------------------------------------
 # Formatting functions
@@ -174,6 +181,7 @@ with st.sidebar:
                 st.session_state.loaded_ticker = (
                     company_data["ticker"]
                 )
+                st.session_state.india_actuals_evidence = {}
                 st.session_state.starting_revenue = float(
                     company_data["revenue"]
                 )
@@ -329,8 +337,9 @@ with st.sidebar:
         official_actuals_sources,
         index=official_actuals_sources.index(default_actuals_source),
         help=(
-            "SEC structured actuals and UK structured/PDF-assisted actuals "
-            "are available. India structured extraction will be added next."
+            "SEC and supported UK accounts can replace model values. For "
+            "India, the app locates the official NSE/BSE results filing and "
+            "retains ticker-statement values until each line item is verified."
         ),
     )
 
@@ -339,11 +348,73 @@ with st.sidebar:
     )
 
     if apply_official_actuals and official_actuals_source == "India — NSE/BSE":
-        st.warning(
-            "Structured financial actuals for India are not "
-            "connected yet. Existing model inputs were preserved, and "
-            "missing filing values were not treated as zero."
+        loaded_india_ticker = (
+            st.session_state.get("loaded_ticker", "").strip().upper()
         )
+        ticker_data_loaded = bool(st.session_state.get("company_snapshot"))
+        try:
+            if not ticker_data_loaded:
+                raise ValueError(
+                    "Load the .NS or .BO ticker financials first."
+                )
+
+            with st.spinner(
+                "Locating the latest official India results filing..."
+            ):
+                india_evidence = get_india_actuals_evidence(
+                    loaded_india_ticker
+                )
+            st.session_state.india_actuals_evidence = india_evidence
+            st.session_state.currency = "INR"
+
+            india_audit_metadata = dict(
+                st.session_state.get("input_audit_metadata", {})
+            )
+            evidence_note = (
+                f"Cross-check against {india_evidence['Exchange']} filing: "
+                f"{india_evidence['Title']} "
+                f"({india_evidence['Filing date']}). The exchange document "
+                "was located but its values were not automatically parsed."
+            )
+            for model_input_name in (
+                "Latest reported revenue",
+                "Annual revenue growth",
+                "EBITDA margin",
+                "Cash",
+                "Debt",
+                "Diluted shares",
+            ):
+                metadata = dict(india_audit_metadata.get(model_input_name, {}))
+                metadata["Source"] = (
+                    f"Ticker financial statements; official "
+                    f"{india_evidence['Exchange']} filing located"
+                )
+                metadata["Definition note"] = evidence_note
+                india_audit_metadata[model_input_name] = metadata
+            st.session_state.input_audit_metadata = india_audit_metadata
+
+            st.warning(
+                f"Official {india_evidence['Exchange']} results filing found. "
+                f"The existing {loaded_india_ticker} ticker-statement inputs "
+                "were retained in INR because the exchange filing does not "
+                "provide a consistent structured set of revenue, cash, debt "
+                "and shares. No value was replaced or set to zero."
+            )
+        except (ValueError, RuntimeError) as error:
+            st.session_state.india_actuals_evidence = {}
+            st.warning(str(error))
+
+    india_evidence = st.session_state.get("india_actuals_evidence", {})
+    if official_actuals_source == "India — NSE/BSE" and india_evidence:
+        st.caption(
+            f"Evidence: {india_evidence['Exchange']} | "
+            f"{india_evidence['Filing date']} | {india_evidence['Title']}"
+        )
+        if india_evidence.get("URL"):
+            st.link_button(
+                "Open official India results filing",
+                india_evidence["URL"],
+            )
 
     if (
         apply_official_actuals

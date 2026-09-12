@@ -1,4 +1,4 @@
-"""Retrieve official corporate announcements for NSE-listed companies."""
+"""Retrieve official NSE and BSE filings and identify results evidence."""
 
 from datetime import date, datetime, timedelta
 from urllib.parse import urljoin
@@ -34,6 +34,14 @@ BSE_HEADERS = {
     "Origin": "https://www.bseindia.com",
     "Referer": "https://www.bseindia.com/",
 }
+
+FINANCIAL_RESULT_TERMS = (
+    "financial result",
+    "annual result",
+    "audited result",
+    "quarterly result",
+    "statement of financial results",
+)
 
 
 def clean_nse_symbol(ticker: str) -> str:
@@ -363,3 +371,71 @@ def get_bse_company_filings(
     )
 
     return company_name, filings
+
+
+def _latest_financial_result(filings: list[dict]) -> dict | None:
+    """Return the newest filing whose title/category identifies results."""
+
+    matching_filings = []
+    for filing in filings:
+        searchable_text = " ".join(
+            str(filing.get(field, ""))
+            for field in ("Category", "Title")
+        ).lower()
+        if any(term in searchable_text for term in FINANCIAL_RESULT_TERMS):
+            matching_filings.append(filing)
+
+    return matching_filings[0] if matching_filings else None
+
+
+def get_india_actuals_evidence(ticker: str) -> dict:
+    """Find the latest official results filing for an Indian ticker.
+
+    NSE/BSE announcement feeds reliably identify and link official result
+    documents, but do not expose a consistent cross-company set of model
+    values.  This function therefore returns review evidence only; callers
+    must not present ticker-provider figures as exchange-extracted values.
+    """
+
+    cleaned_ticker = ticker.strip().upper()
+    try:
+        if cleaned_ticker.endswith(".NS"):
+            company_name, filings = get_nse_company_filings(
+                cleaned_ticker,
+                years=1,
+            )
+            exchange = "NSE"
+            identifier = clean_nse_symbol(cleaned_ticker)
+        elif cleaned_ticker.endswith(".BO"):
+            identifier = clean_bse_scrip_code(cleaned_ticker[:-3])
+            company_name, filings = get_bse_company_filings(
+                identifier,
+                years=1,
+            )
+            exchange = "BSE"
+        else:
+            raise ValueError(
+                "Load an Indian ticker ending in .NS or a six-digit BSE "
+                "code ending in .BO first."
+            )
+    except requests.RequestException as error:
+        raise RuntimeError(
+            "The official India filing service could not be reached. "
+            "Existing model inputs were preserved; please try again."
+        ) from error
+
+    result_filing = _latest_financial_result(filings)
+    if not result_filing:
+        raise ValueError(
+            f"No recent official {exchange} financial-results filing was "
+            "found. Existing model inputs were preserved."
+        )
+
+    return {
+        "Exchange": exchange,
+        "Identifier": identifier,
+        "Company": company_name,
+        "Filing date": result_filing.get("Filing date", ""),
+        "Title": result_filing.get("Title", "Financial results"),
+        "URL": result_filing.get("URL", ""),
+    }
