@@ -101,6 +101,12 @@ if "loaded_input_baseline" not in st.session_state:
 if "india_actuals_evidence" not in st.session_state:
     st.session_state.india_actuals_evidence = {}
 
+if "historical_analysis_table" not in st.session_state:
+    st.session_state.historical_analysis_table = pd.DataFrame()
+
+if "historical_analysis_source" not in st.session_state:
+    st.session_state.historical_analysis_source = ""
+
 
 # ---------------------------------------------------------
 # Formatting functions
@@ -135,6 +141,29 @@ def apply_scenario(
         return max(revenue_growth - 0.03, -0.50), ebitda_margin - 0.03
 
     return revenue_growth, ebitda_margin
+
+
+def build_ticker_revenue_history(
+    historical_revenue: pd.DataFrame,
+) -> pd.DataFrame:
+    """Standardise loaded ticker revenue history for non-SEC markets."""
+
+    if historical_revenue is None or historical_revenue.empty:
+        return pd.DataFrame()
+
+    history = historical_revenue.copy()
+    if "Year" in history.columns:
+        history["Period"] = history["Year"].astype(str)
+    elif "Period" not in history.columns:
+        history["Period"] = history.index.astype(str)
+
+    if "Revenue" not in history.columns:
+        return pd.DataFrame()
+
+    history["Revenue"] = pd.to_numeric(history["Revenue"], errors="coerce")
+    history = history.dropna(subset=["Revenue"])
+    history["Revenue Growth"] = history["Revenue"].pct_change()
+    return history[["Period", "Revenue", "Revenue Growth"]]
 
 
 # ---------------------------------------------------------
@@ -1880,6 +1909,36 @@ else:
             "Forecast years": forecast_years,
         }
 
+        export_source_summary = {
+            "Model input source": official_actuals_source,
+            "Historical source": st.session_state.get(
+                "historical_analysis_source", "Not loaded"
+            ) or "Not loaded",
+            "Market data source": "Yahoo Finance ticker data",
+            "Reporting currency": currency,
+            "Financial units": units,
+        }
+        india_export_evidence = st.session_state.get(
+            "india_actuals_evidence", {}
+        )
+        if india_export_evidence:
+            export_source_summary["Official India filing"] = (
+                f"{india_export_evidence.get('Exchange', '')} | "
+                f"{india_export_evidence.get('Filing date', 'N/A')} | "
+                f"{india_export_evidence.get('Title', '')}"
+            )
+            export_source_summary["Official India filing URL"] = (
+                india_export_evidence.get("URL", "N/A")
+            )
+
+        export_audit_trail = pd.DataFrame(audit_rows)
+        export_historical = st.session_state.get(
+            "historical_analysis_table", pd.DataFrame()
+        )
+        export_comparables = st.session_state.get(
+            "comparable_companies", pd.DataFrame()
+        )
+
         excel_file = create_excel_model(
             company_name=company_name,
             ticker=ticker,
@@ -1890,6 +1949,10 @@ else:
             forecast=forecast,
             valuation=valuation,
             sensitivity=sensitivity,
+            historical=export_historical,
+            comparables=export_comparables,
+            audit_trail=export_audit_trail,
+            source_summary=export_source_summary,
         )
 
         safe_company_name = (
@@ -2144,6 +2207,26 @@ if "valuation" in locals():
         forecast=forecast,
         valuation=valuation,
         red_flags=red_flags,
+        assumptions=assumptions if "assumptions" in locals() else {},
+        historical=st.session_state.get(
+            "historical_analysis_table", pd.DataFrame()
+        ),
+        comparables=st.session_state.get(
+            "comparable_companies", pd.DataFrame()
+        ),
+        sensitivity=(
+            sensitivity if "sensitivity" in locals() else pd.DataFrame()
+        ),
+        audit_trail=pd.DataFrame(audit_rows),
+        source_summary=(
+            export_source_summary
+            if "export_source_summary" in locals()
+            else {
+                "Model input source": official_actuals_source,
+                "Reporting currency": currency,
+                "Financial units": units,
+            }
+        ),
         commentary=st.session_state.get(
             "investment_commentary",
             "",
@@ -2867,12 +2950,59 @@ st.header("Historical financial analysis")
 
 if st.button("Build historical analysis"):
     try:
-        historical_cik = get_sec_cik_from_ticker(sec_ticker)
-        historical_sec_data = get_sec_financial_facts(historical_cik)
+        historical_ticker = st.session_state.get(
+            "loaded_ticker", ticker
+        ).strip().upper()
+        historical_source = ""
 
-        historical_analysis = build_historical_analysis(
-            historical_sec_data
-        )
+        if historical_ticker.endswith(".L"):
+            uk_number = st.session_state.get("uk_company_number", "")
+            if uk_number:
+                try:
+                    historical_uk_data = get_uk_financial_facts(uk_number)
+                    historical_analysis = build_historical_analysis(
+                        historical_uk_data
+                    )
+                    historical_source = (
+                        "UK Companies House structured accounts"
+                    )
+                except Exception:
+                    historical_analysis = build_ticker_revenue_history(
+                        st.session_state.get(
+                            "historical_revenue", pd.DataFrame()
+                        )
+                    )
+                    historical_source = (
+                        f"{historical_ticker} ticker financial statements"
+                    )
+            else:
+                historical_analysis = build_ticker_revenue_history(
+                    st.session_state.get(
+                        "historical_revenue", pd.DataFrame()
+                    )
+                )
+                historical_source = (
+                    f"{historical_ticker} ticker financial statements"
+                )
+        elif historical_ticker.endswith((".NS", ".BO")):
+            historical_analysis = build_ticker_revenue_history(
+                st.session_state.get(
+                    "historical_revenue", pd.DataFrame()
+                )
+            )
+            historical_source = (
+                f"{historical_ticker} ticker financial statements; "
+                "official NSE/BSE filing available separately for review"
+            )
+        else:
+            historical_cik = get_sec_cik_from_ticker(historical_ticker)
+            historical_regulatory_data = get_sec_financial_facts(
+                historical_cik
+            )
+            historical_analysis = build_historical_analysis(
+                historical_regulatory_data
+            )
+            historical_source = "US SEC company facts"
 
         if historical_analysis.empty:
             st.warning("No historical financial data was found.")
@@ -2880,17 +3010,23 @@ if st.button("Build historical analysis"):
         else:
             st.success(
                 f"Historical analysis created for "
-                f"{historical_sec_data['Company']}."
+                f"{st.session_state.get('company_name', historical_ticker)}."
             )
             annual_history = historical_analysis.copy()
 
             # SEC company facts can include comparative quarterly periods
             # reported inside a 10-K. Keep periods with annual balance-sheet
             # data so the historical table contains fiscal years only.
-            if "Total Assets" in annual_history.columns:
+            if (
+                historical_source == "US SEC company facts"
+                and "Total Assets" in annual_history.columns
+            ):
                 annual_history = annual_history[
                     annual_history["Total Assets"].notna()
                 ]
+
+            st.session_state.historical_analysis_table = annual_history
+            st.session_state.historical_analysis_source = historical_source
 
             display_history = (
                 annual_history
@@ -2918,8 +3054,9 @@ if st.button("Build historical analysis"):
             )
 
             st.caption(
-                "Figures are shown in USD millions. N/A means the metric "
-                "was unavailable in the SEC filing; it does not mean zero."
+                f"Source: {historical_source}. Figures are shown in "
+                f"{st.session_state.get('currency', currency)} millions. "
+                "N/A means the metric was unavailable; it does not mean zero."
             )
 
             income_statement_items = [

@@ -15,6 +15,10 @@ def create_excel_model(
     forecast: pd.DataFrame,
     valuation: dict,
     sensitivity: pd.DataFrame,
+    historical: pd.DataFrame | None = None,
+    comparables: pd.DataFrame | None = None,
+    audit_trail: pd.DataFrame | None = None,
+    source_summary: dict | None = None,
 ) -> bytes:
     """Create a formatted Excel workbook and return its bytes."""
 
@@ -24,6 +28,15 @@ def create_excel_model(
     )
     valuation_table = pd.DataFrame(
         {"Valuation item": valuation.keys(), "Value": valuation.values()}
+    )
+    historical = historical if historical is not None else pd.DataFrame()
+    comparables = comparables if comparables is not None else pd.DataFrame()
+    audit_trail = audit_trail if audit_trail is not None else pd.DataFrame()
+    source_table = pd.DataFrame(
+        {
+            "Source detail": (source_summary or {}).keys(),
+            "Value": (source_summary or {}).values(),
+        }
     )
 
     with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
@@ -69,6 +82,15 @@ def create_excel_model(
         valuation_table.to_excel(writer, sheet_name="Valuation", index=False)
         sensitivity.to_excel(writer, sheet_name="Sensitivity")
 
+        if not historical.empty:
+            historical.to_excel(writer, sheet_name="Historical", index=False)
+        if not comparables.empty:
+            comparables.to_excel(writer, sheet_name="Comparables", index=False)
+        if not audit_trail.empty:
+            audit_trail.to_excel(writer, sheet_name="Input Audit", index=False)
+        if not source_table.empty:
+            source_table.to_excel(writer, sheet_name="Sources", index=False)
+
         for sheet_name in ["Assumptions", "Forecast", "Valuation", "Sensitivity"]:
             sheet = writer.sheets[sheet_name]
             sheet.freeze_panes(1, 0)
@@ -95,6 +117,26 @@ def create_excel_model(
             header,
         )
 
+        optional_sheets = {
+            "Historical": historical,
+            "Comparables": comparables,
+            "Input Audit": audit_trail,
+            "Sources": source_table,
+        }
+        for sheet_name, table in optional_sheets.items():
+            if table.empty:
+                continue
+            sheet = writer.sheets[sheet_name]
+            sheet.freeze_panes(1, 0)
+            sheet.write_row(0, 0, table.columns, header)
+            for column_index, column_name in enumerate(table.columns):
+                values = table[column_name].astype(str)
+                width = min(
+                    45,
+                    max(len(str(column_name)), values.map(len).max()) + 2,
+                )
+                sheet.set_column(column_index, column_index, max(12, width))
+
     output.seek(0)
     return output.getvalue()
 def create_pdf_report(
@@ -107,6 +149,12 @@ def create_pdf_report(
     valuation: dict,
     red_flags: list[str],
     commentary: str = "",
+    assumptions: dict | None = None,
+    historical: pd.DataFrame | None = None,
+    comparables: pd.DataFrame | None = None,
+    sensitivity: pd.DataFrame | None = None,
+    audit_trail: pd.DataFrame | None = None,
+    source_summary: dict | None = None,
 ) -> bytes:
     """Create a professional PDF investment report."""
 
@@ -284,6 +332,44 @@ def create_pdf_report(
     story.append(Paragraph("Executive summary", heading_style))
     story.append(summary_table)
 
+    if source_summary:
+        story.append(Paragraph("Data sources and verification", heading_style))
+        source_data = [["Source detail", "Value"]]
+        source_data.extend(
+            [Paragraph(str(key), body_style), Paragraph(str(value or "N/A"), body_style)]
+            for key, value in source_summary.items()
+        )
+        source_table = Table(source_data, colWidths=[48 * mm, 107 * mm], repeatRows=1)
+        source_table.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#4472C4")),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#B8C2CC")),
+            ("FONTSIZE", (0, 0), (-1, -1), 7),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("PADDING", (0, 0), (-1, -1), 4),
+        ]))
+        story.append(source_table)
+
+    if assumptions:
+        story.append(Paragraph("Model assumptions", heading_style))
+        assumption_data = [["Assumption", "Value"]] + [
+            [str(key), "N/A" if value is None else str(value)]
+            for key, value in assumptions.items()
+        ]
+        assumption_table = Table(
+            assumption_data, colWidths=[85 * mm, 70 * mm], repeatRows=1
+        )
+        assumption_table.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#4472C4")),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#B8C2CC")),
+            ("FONTSIZE", (0, 0), (-1, -1), 7),
+            ("PADDING", (0, 0), (-1, -1), 4),
+        ]))
+        story.append(assumption_table)
+
     story.append(Paragraph("Financial forecast", heading_style))
 
     forecast_data = [
@@ -370,6 +456,119 @@ def create_pdf_report(
     )
 
     story.append(forecast_table)
+
+    historical = historical if historical is not None else pd.DataFrame()
+    if not historical.empty:
+        story.append(Paragraph("Historical actuals", heading_style))
+        history_columns = list(historical.columns[:6])
+        history_data = [history_columns]
+        for _, row in historical.tail(8).iterrows():
+            history_data.append([
+                "N/A" if pd.isna(row[column]) else str(row[column])
+                for column in history_columns
+            ])
+        history_table = Table(
+            history_data,
+            colWidths=[155 * mm / len(history_columns)] * len(history_columns),
+            repeatRows=1,
+        )
+        history_table.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#4472C4")),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#B8C2CC")),
+            ("FONTSIZE", (0, 0), (-1, -1), 6.5),
+            ("PADDING", (0, 0), (-1, -1), 3),
+        ]))
+        story.append(history_table)
+
+    comparables = comparables if comparables is not None else pd.DataFrame()
+    if not comparables.empty:
+        story.append(Paragraph("Comparable companies", heading_style))
+        comparable_columns = [
+            column for column in (
+                "Ticker", "Role", "P/E", "EV/Revenue", "EV/EBITDA",
+                "Revenue growth", "EBITDA margin"
+            ) if column in comparables.columns
+        ]
+        comparable_data = [comparable_columns]
+        for _, row in comparables.head(12).iterrows():
+            comparable_data.append([
+                "N/A" if pd.isna(row[column]) else str(row[column])
+                for column in comparable_columns
+            ])
+        comparable_table = Table(
+            comparable_data,
+            colWidths=[155 * mm / len(comparable_columns)] * len(comparable_columns),
+            repeatRows=1,
+        )
+        comparable_table.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#4472C4")),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#B8C2CC")),
+            ("FONTSIZE", (0, 0), (-1, -1), 6.5),
+            ("PADDING", (0, 0), (-1, -1), 3),
+        ]))
+        story.append(comparable_table)
+
+    sensitivity = sensitivity if sensitivity is not None else pd.DataFrame()
+    if not sensitivity.empty:
+        story.append(Paragraph("DCF sensitivity", heading_style))
+        sensitivity_display = sensitivity.reset_index()
+        sensitivity_columns = list(sensitivity_display.columns)
+        sensitivity_data = [sensitivity_columns]
+        for _, row in sensitivity_display.iterrows():
+            sensitivity_data.append([
+                "N/A" if pd.isna(row[column]) else str(row[column])
+                for column in sensitivity_columns
+            ])
+        sensitivity_table = Table(
+            sensitivity_data,
+            colWidths=[155 * mm / len(sensitivity_columns)] * len(sensitivity_columns),
+            repeatRows=1,
+        )
+        sensitivity_table.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#4472C4")),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#B8C2CC")),
+            ("FONTSIZE", (0, 0), (-1, -1), 6),
+            ("PADDING", (0, 0), (-1, -1), 3),
+        ]))
+        story.append(sensitivity_table)
+
+    audit_trail = audit_trail if audit_trail is not None else pd.DataFrame()
+    if not audit_trail.empty:
+        story.append(PageBreak())
+        story.append(Paragraph("Model input audit trail", heading_style))
+        audit_columns = [
+            column for column in (
+                "Model input", "Value used", "Units", "Source",
+                "Reporting date", "Status"
+            ) if column in audit_trail.columns
+        ]
+        audit_data = [audit_columns]
+        for _, row in audit_trail.iterrows():
+            audit_data.append([
+                Paragraph(str(row[column] if pd.notna(row[column]) else "N/A"), body_style)
+                for column in audit_columns
+            ])
+        audit_table = Table(
+            audit_data,
+            colWidths=[155 * mm / len(audit_columns)] * len(audit_columns),
+            repeatRows=1,
+        )
+        audit_table.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1F4E78")),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#B8C2CC")),
+            ("FONTSIZE", (0, 0), (-1, -1), 6),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("PADDING", (0, 0), (-1, -1), 3),
+        ]))
+        story.append(audit_table)
 
     story.append(Paragraph("Financial red flags", heading_style))
 
