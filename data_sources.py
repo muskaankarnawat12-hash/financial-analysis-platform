@@ -1,5 +1,6 @@
 """Functions for retrieving public company financial data."""
 
+from datetime import datetime, timezone
 from typing import Any
 
 import pandas as pd
@@ -23,6 +24,37 @@ def find_latest_value(
                 return float(values.iloc[0])
 
     return None
+
+
+def find_latest_value_with_label(
+    statement: pd.DataFrame,
+    possible_names: list[str],
+) -> tuple[float | None, str]:
+    """Return the latest value and the statement label used for it."""
+
+    if statement is None or statement.empty:
+        return None, ""
+
+    for name in possible_names:
+        if name in statement.index:
+            values = statement.loc[name].dropna()
+            if not values.empty:
+                return float(values.iloc[0]), name
+
+    return None, ""
+
+
+def latest_statement_period(statement: pd.DataFrame) -> str:
+    """Return the latest available statement-column date."""
+
+    if statement is None or statement.empty or len(statement.columns) == 0:
+        return "N/A"
+
+    period = statement.columns[0]
+    try:
+        return pd.Timestamp(period).strftime("%Y-%m-%d")
+    except Exception:
+        return str(period)
 
 
 def get_company_data(ticker: str) -> dict[str, Any]:
@@ -53,17 +85,17 @@ def get_company_data(ticker: str) -> dict[str, Any]:
             "Please check the ticker and try again."
         )
 
-    revenue = find_latest_value(
+    revenue, revenue_line_item = find_latest_value_with_label(
         income_statement,
         ["Total Revenue", "Operating Revenue"],
     )
 
-    ebitda = find_latest_value(
+    ebitda, ebitda_line_item = find_latest_value_with_label(
         income_statement,
         ["EBITDA", "Normalized EBITDA"],
     )
 
-    cash = find_latest_value(
+    cash, cash_line_item = find_latest_value_with_label(
         balance_sheet,
         [
             "Cash Cash Equivalents And Short Term Investments",
@@ -72,7 +104,7 @@ def get_company_data(ticker: str) -> dict[str, Any]:
         ],
     )
 
-    debt = find_latest_value(
+    debt, debt_line_item = find_latest_value_with_label(
         balance_sheet,
         [
             "Total Debt",
@@ -90,7 +122,8 @@ def get_company_data(ticker: str) -> dict[str, Any]:
         "longName",
         information.get("shortName", cleaned_ticker),
     )
-    currency = information.get("currency", "USD")
+    quote_currency = information.get("currency", "USD")
+    currency = information.get("financialCurrency") or quote_currency
     shares = information.get(
         "sharesOutstanding",
         information.get("impliedSharesOutstanding"),
@@ -101,7 +134,31 @@ def get_company_data(ticker: str) -> dict[str, Any]:
     )
     market_cap = information.get("marketCap")
     revenue_growth = information.get("revenueGrowth")
+    enterprise_value = information.get("enterpriseValue")
+    trailing_pe = information.get("trailingPE")
+    fifty_two_week_high = information.get("fiftyTwoWeekHigh")
+    fifty_two_week_low = information.get("fiftyTwoWeekLow")
+    dividend_yield = information.get("dividendYield")
+    beta = information.get("beta")
     divisor = 1_000_000
+
+    if str(quote_currency) in {"GBp", "GBX", "GBx"}:
+        current_price = (
+            float(current_price) / 100
+            if current_price is not None
+            else None
+        )
+        fifty_two_week_high = (
+            float(fifty_two_week_high) / 100
+            if fifty_two_week_high is not None
+            else None
+        )
+        fifty_two_week_low = (
+            float(fifty_two_week_low) / 100
+            if fifty_two_week_low is not None
+            else None
+        )
+        currency = "GBP"
 
     revenue_millions = revenue / divisor
     cash_millions = (cash or 0) / divisor
@@ -115,6 +172,15 @@ def get_company_data(ticker: str) -> dict[str, Any]:
 
     if revenue_growth is None:
         revenue_growth = 0.10
+
+    income_period = latest_statement_period(income_statement)
+    balance_period = latest_statement_period(balance_sheet)
+    market_data_date = (
+        pd.Timestamp(price_history.index[-1]).strftime("%Y-%m-%d")
+        if not price_history.empty
+        else "N/A"
+    )
+    fetched_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
     historical_revenue = []
 
@@ -154,6 +220,70 @@ def get_company_data(ticker: str) -> dict[str, Any]:
         "diluted_shares": max(shares_millions, 0.01),
         "current_price": current_price,
         "market_cap": market_cap,
+        "enterprise_value": enterprise_value,
+        "trailing_pe": trailing_pe,
+        "fifty_two_week_high": fifty_two_week_high,
+        "fifty_two_week_low": fifty_two_week_low,
+        "dividend_yield": dividend_yield,
+        "beta": beta,
+        "sector": information.get("sector"),
+        "industry": information.get("industry"),
+        "country": information.get("country"),
+        "website": information.get("website"),
+        "employees": information.get("fullTimeEmployees"),
+        "business_summary": information.get("longBusinessSummary"),
+        "quote_currency": quote_currency,
+        "market_data_date": market_data_date,
+        "fetched_at": fetched_at,
+        "audit_metadata": {
+            "Latest reported revenue": {
+                "Source": "Yahoo Finance financial statements",
+                "Reporting date": income_period,
+                "Line item": revenue_line_item or "N/A",
+                "Definition note": "Latest reported consolidated revenue",
+            },
+            "Annual revenue growth": {
+                "Source": "Yahoo Finance company statistics",
+                "Reporting date": fetched_at,
+                "Line item": "Revenue growth",
+                "Definition note": "Provider growth metric or 10% fallback",
+            },
+            "EBITDA margin": {
+                "Source": "Yahoo Finance financial statements",
+                "Reporting date": income_period,
+                "Line item": (
+                    f"{ebitda_line_item or 'EBITDA fallback'} / "
+                    f"{revenue_line_item or 'Revenue'}"
+                ),
+                "Definition note": "EBITDA divided by revenue",
+            },
+            "Cash": {
+                "Source": "Yahoo Finance balance sheet",
+                "Reporting date": balance_period,
+                "Line item": cash_line_item or "N/A",
+                "Definition note": "May include short-term investments",
+            },
+            "Debt": {
+                "Source": "Yahoo Finance balance sheet",
+                "Reporting date": balance_period,
+                "Line item": debt_line_item or "N/A",
+                "Definition note": "Lease treatment depends on source line item",
+            },
+            "Diluted shares": {
+                "Source": "Yahoo Finance company statistics",
+                "Reporting date": fetched_at,
+                "Line item": "Shares outstanding",
+                "Definition note": "Period-end shares; may differ from diluted weighted average",
+            },
+            "Current price": {
+                "Source": "Yahoo Finance market data",
+                "Reporting date": market_data_date,
+                "Line item": "Current/regular market price",
+                "Definition note": (
+                    f"Original quote currency {quote_currency}; normalized to {currency}"
+                ),
+            },
+        },
         "historical_revenue": historical_revenue_df,
         "income_statement": income_statement,
         "balance_sheet": balance_sheet,

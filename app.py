@@ -13,7 +13,10 @@ from sec_data import (
 )
 from exports import create_excel_model, create_pdf_report
 from india_data import get_bse_company_filings, get_nse_company_filings
-from uk_data import get_uk_company_filings, get_uk_financial_facts
+from uk_data import (
+    get_uk_company_filings,
+    get_uk_financial_facts,
+)
 from global_filings import build_global_filings_table, filter_global_filings
 from financial_model import (
     build_historical_analysis,
@@ -81,6 +84,15 @@ if "comparable_companies" not in st.session_state:
 
 if "company_snapshot" not in st.session_state:
     st.session_state.company_snapshot = {}
+
+if "uk_pdf_actuals_preview" not in st.session_state:
+    st.session_state.uk_pdf_actuals_preview = {}
+
+if "input_audit_metadata" not in st.session_state:
+    st.session_state.input_audit_metadata = {}
+
+if "loaded_input_baseline" not in st.session_state:
+    st.session_state.loaded_input_baseline = {}
 
 
 # ---------------------------------------------------------
@@ -215,6 +227,30 @@ with st.sidebar:
                     "business_summary": company_data[
                         "business_summary"
                     ],
+                    "quote_currency": company_data.get("quote_currency"),
+                    "market_data_date": company_data.get(
+                        "market_data_date"
+                    ),
+                }
+                st.session_state.input_audit_metadata = company_data.get(
+                    "audit_metadata", {}
+                )
+                st.session_state.loaded_input_baseline = {
+                    "Latest reported revenue": float(
+                        company_data["revenue"]
+                    ),
+                    "Annual revenue growth": float(
+                        company_data["revenue_growth"] * 100
+                    ),
+                    "EBITDA margin": float(
+                        company_data["ebitda_margin"] * 100
+                    ),
+                    "Cash": float(company_data["cash"]),
+                    "Debt": float(company_data["debt"]),
+                    "Diluted shares": float(
+                        company_data["diluted_shares"]
+                    ),
+                    "Current price": company_data.get("current_price"),
                 }
 
                 st.success(
@@ -293,8 +329,8 @@ with st.sidebar:
         official_actuals_sources,
         index=official_actuals_sources.index(default_actuals_source),
         help=(
-            "SEC structured actuals are available now. India and UK "
-            "structured-account extraction will be added next."
+            "SEC structured actuals and UK structured/PDF-assisted actuals "
+            "are available. India structured extraction will be added next."
         ),
     )
 
@@ -382,15 +418,144 @@ with st.sidebar:
                     "Existing model inputs were preserved."
                 )
 
+            uk_audit_metadata = dict(
+                st.session_state.get("input_audit_metadata", {})
+            )
+            uk_loaded_baseline = dict(
+                st.session_state.get("loaded_input_baseline", {})
+            )
+            uk_loaded_baseline["Annual revenue growth"] = (
+                st.session_state.revenue_growth_input
+            )
+            uk_audit_metadata["Annual revenue growth"] = {
+                "Source": "UK Companies House structured accounts",
+                "Reporting date": (
+                    uk_revenue_records[0].get("Period", "N/A")
+                    if uk_revenue_records
+                    else "N/A"
+                ),
+                "Line item": "Revenue CAGR",
+                "Definition note": "Calculated from available annual revenue history",
+            }
+            for metric_name, records, model_input_name in (
+                ("Revenue", uk_revenue_records, "Latest reported revenue"),
+                ("Cash", uk_cash_records, "Cash"),
+                ("Long-Term Debt", uk_debt_records, "Debt"),
+            ):
+                if records and records[0].get("Value") is not None:
+                    value_millions = records[0]["Value"] / 1_000_000
+                    uk_loaded_baseline[model_input_name] = value_millions
+                    uk_audit_metadata[model_input_name] = {
+                        "Source": "UK Companies House structured accounts",
+                        "Reporting date": records[0].get("Period", "N/A"),
+                        "Line item": metric_name,
+                        "Definition note": (
+                            "Official structured filing value; unavailable "
+                            "metrics retain their prior input"
+                        ),
+                    }
+
+            st.session_state.input_audit_metadata = uk_audit_metadata
+            st.session_state.loaded_input_baseline = uk_loaded_baseline
             st.session_state.currency = "GBP"
+            st.session_state.uk_pdf_actuals_preview = {}
             st.success(
                 "Companies House actuals applied in GBP millions. Updated: "
                 + ", ".join(uk_applied_metrics)
                 + ". Unavailable values were preserved, not set to zero."
             )
 
-        except Exception as error:
-            st.error(f"Could not apply UK actuals: {error}")
+        except Exception:
+            st.session_state.uk_pdf_actuals_preview = {}
+            loaded_uk_ticker = (
+                st.session_state.get("loaded_ticker", "")
+                .strip()
+                .upper()
+            )
+            ticker_data_loaded = bool(
+                st.session_state.get("company_snapshot")
+            )
+
+            if loaded_uk_ticker.endswith(".L") and ticker_data_loaded:
+                st.session_state.currency = "GBP"
+                st.warning(
+                    "Official Companies House accounts are available for "
+                    "viewing, but this filing does not provide reliable "
+                    "structured model inputs. The existing "
+                    f"{loaded_uk_ticker} ticker-based inputs were retained "
+                    "in GBP. No values were replaced or set to zero."
+                )
+            else:
+                st.warning(
+                    "Official UK accounts could not provide reliable model "
+                    "inputs. Load the company's London ticker, such as "
+                    "TSCO.L, using 'Load company financials'. Existing "
+                    "inputs were preserved."
+                )
+
+    uk_pdf_preview = st.session_state.get("uk_pdf_actuals_preview", {})
+    if (
+        official_actuals_source == "United Kingdom — Companies House"
+        and uk_pdf_preview
+    ):
+        st.subheader("Review UK PDF actuals")
+        st.warning(
+            "These figures were extracted from a PDF and are unverified. "
+            "Compare each value with the cited page before selecting it."
+        )
+        st.caption(
+            f"{uk_pdf_preview.get('Company', '')} | Filing date: "
+            f"{uk_pdf_preview.get('Filing date', 'N/A')}"
+        )
+        document_url = uk_pdf_preview.get("Document URL", "")
+        if document_url:
+            st.link_button("Open official accounts PDF", document_url)
+
+        reviewed_uk_values = {}
+        for candidate in uk_pdf_preview.get("Candidates", []):
+            metric = candidate["Metric"]
+            safe_metric_key = metric.lower().replace(" ", "_")
+            with st.expander(
+                f"{metric} — page {candidate['Page']}",
+                expanded=True,
+            ):
+                reviewed_value = st.number_input(
+                    f"{metric} (GBP millions)",
+                    value=float(candidate["Value (GBP millions)"]),
+                    key=f"uk_pdf_value_{safe_metric_key}",
+                )
+                st.caption(
+                    f"Detected unit: {candidate['Unit detected']}"
+                )
+                st.code(candidate["Evidence"], language=None)
+                use_value = st.checkbox(
+                    f"I verified this {metric.lower()} value",
+                    key=f"uk_pdf_confirm_{safe_metric_key}",
+                )
+                if use_value:
+                    reviewed_uk_values[metric] = reviewed_value
+
+        if st.button("Apply verified UK PDF values"):
+            if not reviewed_uk_values:
+                st.warning(
+                    "Verify and select at least one value before applying."
+                )
+            else:
+                if "Revenue" in reviewed_uk_values:
+                    st.session_state.starting_revenue = reviewed_uk_values[
+                        "Revenue"
+                    ]
+                if "Cash" in reviewed_uk_values:
+                    st.session_state.cash = reviewed_uk_values["Cash"]
+                if "Debt" in reviewed_uk_values:
+                    st.session_state.debt = reviewed_uk_values["Debt"]
+
+                st.session_state.currency = "GBP"
+                st.success(
+                    "Verified UK PDF values applied in GBP millions: "
+                    + ", ".join(reviewed_uk_values)
+                    + ". Unselected values were preserved."
+                )
 
     if apply_official_actuals and official_actuals_source == "United States — SEC":
         try:
@@ -501,6 +666,55 @@ with st.sidebar:
                     "model inputs were preserved."
                 )
 
+            sec_audit_metadata = dict(
+                st.session_state.get("input_audit_metadata", {})
+            )
+            sec_loaded_baseline = dict(
+                st.session_state.get("loaded_input_baseline", {})
+            )
+            sec_loaded_baseline["Annual revenue growth"] = (
+                st.session_state.revenue_growth_input
+            )
+            sec_loaded_baseline["EBITDA margin"] = (
+                st.session_state.ebitda_margin_input
+            )
+            sec_audit_metadata["Annual revenue growth"] = {
+                "Source": "SEC company facts",
+                "Reporting date": (
+                    revenue_records[0].get("Period", "N/A")
+                    if revenue_records
+                    else "N/A"
+                ),
+                "Line item": "Revenue CAGR",
+                "Definition note": "Calculated from recent SEC annual revenue",
+            }
+            sec_audit_metadata["EBITDA margin"] = {
+                "Source": "SEC company facts",
+                "Reporting date": (
+                    revenue_records[0].get("Period", "N/A")
+                    if revenue_records
+                    else "N/A"
+                ),
+                "Line item": "Average EBITDA margin",
+                "Definition note": "Calculated from recent SEC annual history",
+            }
+            for metric_name, records, model_input_name in (
+                ("Revenue", revenue_records, "Latest reported revenue"),
+                ("Cash", cash_records, "Cash"),
+                ("Long-Term Debt", debt_records, "Debt"),
+            ):
+                if records and records[0].get("Value") is not None:
+                    value_millions = records[0]["Value"] / 1_000_000
+                    sec_loaded_baseline[model_input_name] = value_millions
+                    sec_audit_metadata[model_input_name] = {
+                        "Source": "SEC company facts",
+                        "Reporting date": records[0].get("Period", "N/A"),
+                        "Line item": metric_name,
+                        "Definition note": "Official SEC XBRL filing value",
+                    }
+
+            st.session_state.input_audit_metadata = sec_audit_metadata
+            st.session_state.loaded_input_baseline = sec_loaded_baseline
             st.session_state.currency = "USD"
             st.success(
                 "SEC actuals applied in USD millions. Updated: "
@@ -597,8 +811,8 @@ with st.sidebar:
     diluted_shares = st.number_input(
         "Diluted shares",
         min_value=0.01,
-        value=float(st.session_state.diluted_shares),
         step=1.0,
+        key="diluted_shares",
     )
 
     wacc_input = st.slider(
@@ -618,6 +832,148 @@ with st.sidebar:
         step=0.5,
         format="%.1f%%",
     )
+
+
+# ---------------------------------------------------------
+# Model input audit trail
+# ---------------------------------------------------------
+
+audit_metadata = st.session_state.get("input_audit_metadata", {})
+loaded_baseline = st.session_state.get("loaded_input_baseline", {})
+current_audit_values = {
+    "Latest reported revenue": starting_revenue,
+    "Annual revenue growth": revenue_growth_input,
+    "EBITDA margin": ebitda_margin_input,
+    "Depreciation": depreciation_input,
+    "Tax rate": tax_rate_input,
+    "Capital expenditure": capex_input,
+    "Net working capital": nwc_input,
+    "Cash": cash,
+    "Debt": debt,
+    "Diluted shares": diluted_shares,
+    "WACC": wacc_input,
+    "Terminal growth rate": terminal_growth_input,
+    "Current price": st.session_state.get("current_price"),
+}
+percentage_inputs = {
+    "Annual revenue growth",
+    "EBITDA margin",
+    "Depreciation",
+    "Tax rate",
+    "Capital expenditure",
+    "Net working capital",
+    "WACC",
+    "Terminal growth rate",
+}
+user_assumption_inputs = {
+    "Depreciation",
+    "Tax rate",
+    "Capital expenditure",
+    "Net working capital",
+    "WACC",
+    "Terminal growth rate",
+}
+
+audit_rows = []
+for input_name, current_value in current_audit_values.items():
+    metadata = audit_metadata.get(input_name, {})
+    original_value = loaded_baseline.get(input_name)
+
+    if input_name in user_assumption_inputs:
+        source_name = "User assumption"
+        reporting_date = "N/A"
+        line_item = "Model assumption"
+        definition_note = "Editable forecast or valuation assumption"
+        status = "User input"
+    else:
+        source_name = metadata.get("Source", "Manual input")
+        reporting_date = metadata.get("Reporting date", "N/A")
+        line_item = metadata.get("Line item", "N/A")
+        definition_note = metadata.get("Definition note", "")
+
+        if original_value is None or current_value is None:
+            status = "Review source"
+        else:
+            tolerance = max(0.0001, abs(float(original_value)) * 0.000001)
+            status = (
+                "Source value"
+                if abs(float(current_value) - float(original_value)) <= tolerance
+                else "Manual override"
+            )
+
+        if (
+            input_name in {"Cash", "Debt"}
+            and line_item == "N/A"
+            and source_name != "Manual input"
+        ):
+            status = "Missing source value"
+
+    if input_name in percentage_inputs:
+        unit_label = "%"
+    elif input_name == "Diluted shares":
+        unit_label = "millions of shares"
+    elif input_name == "Current price":
+        unit_label = f"{currency} per share"
+    else:
+        unit_label = f"{currency} {units}"
+
+    if (
+        input_name in {"Latest reported revenue", "Cash", "Debt"}
+        and source_name != "Manual input"
+        and units != "millions"
+    ):
+        status = "Check units"
+
+    audit_rows.append(
+        {
+            "Model input": input_name,
+            "Value used": (
+                "N/A" if current_value is None else current_value
+            ),
+            "Original loaded value": (
+                "N/A" if original_value is None else original_value
+            ),
+            "Units": unit_label,
+            "Source": source_name,
+            "Reporting date": reporting_date,
+            "Source line item": line_item,
+            "Status": status,
+            "Definition note": definition_note,
+        }
+    )
+
+with st.expander("Model input audit trail", expanded=True):
+    st.caption(
+        "Source value means the input still matches the loaded data. Manual "
+        "override means it has been edited since loading."
+    )
+    st.dataframe(
+        pd.DataFrame(audit_rows),
+        hide_index=True,
+        width="stretch",
+    )
+
+    loaded_reporting_dates = {
+        audit_metadata.get(name, {}).get("Reporting date")
+        for name in ("Latest reported revenue", "Cash", "Debt")
+        if audit_metadata.get(name, {}).get("Reporting date") not in {
+            None,
+            "",
+            "N/A",
+        }
+    }
+    if len(loaded_reporting_dates) > 1:
+        st.warning(
+            "Revenue, cash and debt come from different reporting dates. "
+            "Review the source periods before relying on the valuation."
+        )
+
+    if units != "millions" and audit_metadata:
+        st.warning(
+            "Loaded ticker values are normalized to millions. Change "
+            "Financial units back to 'millions' or manually convert every "
+            "monetary input before using another unit setting."
+        )
 
 
 # ---------------------------------------------------------

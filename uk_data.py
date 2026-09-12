@@ -4,10 +4,12 @@ import os
 import re
 from datetime import date
 from decimal import Decimal, InvalidOperation
+from io import BytesIO
 from xml.etree import ElementTree
 
 import requests
 from dotenv import load_dotenv
+from pypdf import PdfReader
 
 
 load_dotenv()
@@ -368,4 +370,192 @@ def get_uk_financial_facts(company_number: str) -> dict:
     raise ValueError(
         "No machine-readable UK accounts with supported revenue, cash or "
         "long-term debt values were available for this company."
+    )
+
+
+def _pdf_unit_multiplier(page_text: str) -> tuple[float, str]:
+    """Infer the unit used by a financial-statement page."""
+
+    lowered = page_text.lower()
+    if re.search(r"£\s*(?:bn|billion)", lowered):
+        return 1_000.0, "GBP billions"
+    if re.search(r"£\s*(?:m|million)|gbp\s*(?:m|million)", lowered):
+        return 1.0, "GBP millions"
+    if re.search(r"£\s*000|£\s*'000|gbp\s*000", lowered):
+        return 0.001, "GBP thousands"
+    return 0.000001, "GBP units"
+
+
+def _parse_pdf_amount(value: str) -> float | None:
+    """Convert a PDF number token into a signed float."""
+
+    cleaned = value.strip().replace(",", "").replace(" ", "")
+    cleaned = cleaned.replace("−", "-").replace("–", "-")
+    negative = cleaned.startswith("(") and cleaned.endswith(")")
+    if negative:
+        cleaned = cleaned[1:-1]
+
+    try:
+        amount = float(cleaned)
+        return -abs(amount) if negative else amount
+    except ValueError:
+        return None
+
+
+def _pdf_metric_candidates(
+    page_texts: list[str],
+) -> list[dict]:
+    """Find reviewable revenue, cash and debt candidates in a UK accounts PDF."""
+
+    metric_labels = {
+        "Revenue": ("revenue", "turnover"),
+        "Cash": ("cash and cash equivalents", "cash at bank and in hand"),
+        "Debt": (
+            "borrowings",
+            "loans and borrowings",
+            "interest-bearing loans and borrowings",
+        ),
+    }
+    number_pattern = re.compile(
+        r"(?<![A-Za-z0-9])(?:\(?-?\d{1,3}(?:,\d{3})+(?:\.\d+)?\)?|"
+        r"\(?-?\d+(?:\.\d+)?\)?)(?![A-Za-z0-9])"
+    )
+    candidates = []
+
+    for page_number, page_text in enumerate(page_texts, start=1):
+        if not page_text:
+            continue
+
+        multiplier, unit_label = _pdf_unit_multiplier(page_text)
+        lowered_page = page_text.lower()
+        statement_bonus = 3 if any(
+            heading in lowered_page
+            for heading in (
+                "income statement",
+                "statement of financial position",
+                "balance sheet",
+                "cash flow statement",
+            )
+        ) else 0
+
+        for raw_line in page_text.splitlines():
+            line = " ".join(raw_line.split())
+            lowered_line = line.lower()
+            if not line:
+                continue
+
+            for metric, labels in metric_labels.items():
+                matched_label = next(
+                    (label for label in labels if label in lowered_line),
+                    None,
+                )
+                if not matched_label:
+                    continue
+
+                label_position = lowered_line.find(matched_label)
+                amount_text = line[label_position + len(matched_label):]
+                number_matches = list(number_pattern.finditer(amount_text))
+                if not number_matches:
+                    continue
+
+                token = number_matches[0].group(0)
+                amount = _parse_pdf_amount(token)
+                if amount is None:
+                    continue
+
+                score = statement_bonus
+                score += 3 if lowered_line.startswith(matched_label) else 0
+                score += 2 if "," in token else 0
+                score += 2 if multiplier != 0.000001 else 0
+                score -= 2 if any(
+                    word in lowered_line
+                    for word in ("percentage", "growth", "per share")
+                ) else 0
+
+                candidates.append(
+                    {
+                        "Metric": metric,
+                        "Value (GBP millions)": amount * multiplier,
+                        "Page": page_number,
+                        "Unit detected": unit_label,
+                        "Evidence": line[:300],
+                        "Confidence score": score,
+                    }
+                )
+
+    best_candidates = []
+    for metric in metric_labels:
+        metric_candidates = [
+            candidate
+            for candidate in candidates
+            if candidate["Metric"] == metric
+        ]
+        if metric_candidates:
+            best_candidates.append(
+                max(
+                    metric_candidates,
+                    key=lambda candidate: (
+                        candidate["Confidence score"],
+                        -candidate["Page"],
+                    ),
+                )
+            )
+
+    return best_candidates
+
+
+def get_uk_pdf_actuals_preview(company_number: str) -> dict:
+    """Extract unverified model-input candidates from official UK accounts PDFs."""
+
+    cleaned_number = clean_uk_company_number(company_number)
+    profile = _request(f"/company/{cleaned_number}")
+    company_name = profile.get("company_name") or cleaned_number
+    payload = _request(
+        f"/company/{cleaned_number}/filing-history",
+        {"category": "accounts", "items_per_page": 100},
+    )
+
+    for filing in payload.get("items") or []:
+        document_link = str(
+            (filing.get("links") or {}).get("document_metadata") or ""
+        )
+        document_id = document_link.rstrip("/").split("/")[-1]
+        if not document_id:
+            continue
+
+        metadata = _document_request(f"/document/{document_id}").json()
+        resources = metadata.get("resources") or {}
+        if "application/pdf" not in resources:
+            continue
+
+        document = _document_request(
+            f"/document/{document_id}/content",
+            accept="application/pdf",
+        )
+        try:
+            reader = PdfReader(BytesIO(document.content))
+            page_texts = [page.extract_text() or "" for page in reader.pages]
+        except Exception as error:
+            raise ValueError(
+                "The latest official accounts PDF could not be read."
+            ) from error
+
+        candidates = _pdf_metric_candidates(page_texts)
+        if candidates:
+            transaction_id = str(filing.get("transaction_id") or "")
+            document_url = (
+                f"{COMPANIES_HOUSE_WEB}/company/{cleaned_number}/"
+                f"filing-history/{transaction_id}/document"
+            )
+            return {
+                "Company": company_name,
+                "Company number": cleaned_number,
+                "Filing date": str(filing.get("date") or ""),
+                "Document URL": document_url,
+                "Candidates": candidates,
+            }
+
+    raise ValueError(
+        "No reviewable revenue, cash or debt values could be extracted from "
+        "the available official Companies House accounts PDFs."
     )
