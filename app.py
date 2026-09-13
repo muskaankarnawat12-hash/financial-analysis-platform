@@ -6,6 +6,7 @@ import streamlit as st
 
 from ai_analysis import generate_rule_based_analysis
 from data_sources import (
+    build_ticker_historical_analysis,
     get_automatic_peer_tickers,
     get_comparable_companies,
     get_company_data,
@@ -83,6 +84,9 @@ if "current_price" not in st.session_state:
 
 if "historical_revenue" not in st.session_state:
     st.session_state.historical_revenue = pd.DataFrame()
+
+if "ticker_historical_statements" not in st.session_state:
+    st.session_state.ticker_historical_statements = {}
 
 if "sec_historical_analysis" not in st.session_state:
     st.session_state.sec_historical_analysis = pd.DataFrame()
@@ -173,6 +177,23 @@ def build_ticker_revenue_history(
     return history[["Period", "Revenue", "Revenue Growth"]]
 
 
+def build_loaded_ticker_history() -> pd.DataFrame:
+    """Build full history from statements retained when a ticker is loaded."""
+
+    statements = st.session_state.get("ticker_historical_statements", {})
+    history = build_ticker_historical_analysis(
+        statements.get("income_statement", pd.DataFrame()),
+        statements.get("balance_sheet", pd.DataFrame()),
+        statements.get("cash_flow_statement", pd.DataFrame()),
+    )
+    if not history.empty:
+        return history
+
+    return build_ticker_revenue_history(
+        st.session_state.get("historical_revenue", pd.DataFrame())
+    )
+
+
 # ---------------------------------------------------------
 # Header
 # ---------------------------------------------------------
@@ -245,6 +266,19 @@ with st.sidebar:
                 st.session_state.historical_revenue = (
                     company_data["historical_revenue"]
                 )
+                st.session_state.ticker_historical_statements = {
+                    "income_statement": company_data.get(
+                        "income_statement", pd.DataFrame()
+                    ),
+                    "balance_sheet": company_data.get(
+                        "balance_sheet", pd.DataFrame()
+                    ),
+                    "cash_flow_statement": company_data.get(
+                        "cash_flow_statement", pd.DataFrame()
+                    ),
+                }
+                st.session_state.historical_analysis_table = pd.DataFrame()
+                st.session_state.historical_analysis_source = ""
                 st.session_state.company_snapshot = {
                     "ticker": company_data["ticker"],
                     "company_name": company_data["company_name"],
@@ -2999,29 +3033,17 @@ if st.button("Build historical analysis"):
                         "UK Companies House structured accounts"
                     )
                 except Exception:
-                    historical_analysis = build_ticker_revenue_history(
-                        st.session_state.get(
-                            "historical_revenue", pd.DataFrame()
-                        )
-                    )
+                    historical_analysis = build_loaded_ticker_history()
                     historical_source = (
                         f"{historical_ticker} ticker financial statements"
                     )
             else:
-                historical_analysis = build_ticker_revenue_history(
-                    st.session_state.get(
-                        "historical_revenue", pd.DataFrame()
-                    )
-                )
+                historical_analysis = build_loaded_ticker_history()
                 historical_source = (
                     f"{historical_ticker} ticker financial statements"
                 )
         elif historical_ticker.endswith((".NS", ".BO")):
-            historical_analysis = build_ticker_revenue_history(
-                st.session_state.get(
-                    "historical_revenue", pd.DataFrame()
-                )
-            )
+            historical_analysis = build_loaded_ticker_history()
             historical_source = (
                 f"{historical_ticker} ticker financial statements; "
                 "official NSE/BSE filing available separately for review"

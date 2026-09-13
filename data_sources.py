@@ -145,6 +145,137 @@ def latest_statement_period(statement: pd.DataFrame) -> str:
         return str(period)
 
 
+def _historical_metric(
+    statement: pd.DataFrame,
+    possible_names: list[str],
+    divisor: float = 1_000_000,
+) -> dict[str, float]:
+    """Return a normalized annual history for the first matching line item."""
+
+    if statement is None or statement.empty:
+        return {}
+
+    for name in possible_names:
+        if name not in statement.index:
+            continue
+
+        values = {}
+        for period, value in statement.loc[name].items():
+            if pd.isna(value):
+                continue
+            try:
+                period_label = pd.Timestamp(period).strftime("%Y-%m-%d")
+                values[period_label] = float(value) / divisor
+            except (TypeError, ValueError):
+                continue
+        if values:
+            return values
+
+    return {}
+
+
+def build_ticker_historical_analysis(
+    income_statement: pd.DataFrame,
+    balance_sheet: pd.DataFrame,
+    cash_flow_statement: pd.DataFrame,
+) -> pd.DataFrame:
+    """Create a multi-year analysis from annual ticker financial statements."""
+
+    metrics = {
+        "Revenue": _historical_metric(
+            income_statement, ["Total Revenue", "Operating Revenue"]
+        ),
+        "Cost of Revenue": _historical_metric(
+            income_statement, ["Cost Of Revenue", "Cost of Revenue"]
+        ),
+        "Gross Profit": _historical_metric(
+            income_statement, ["Gross Profit"]
+        ),
+        "Operating Income": _historical_metric(
+            income_statement, ["Operating Income", "Operating Income Loss"]
+        ),
+        "Depreciation and Amortisation": _historical_metric(
+            cash_flow_statement,
+            ["Depreciation And Amortization", "Depreciation", "Depreciation And Amortisation"],
+        ),
+        "EBITDA": _historical_metric(
+            income_statement, ["EBITDA", "Normalized EBITDA"]
+        ),
+        "Net Income": _historical_metric(
+            income_statement, ["Net Income", "Net Income Common Stockholders"]
+        ),
+        "Cash": _historical_metric(
+            balance_sheet,
+            [
+                "Cash Cash Equivalents And Short Term Investments",
+                "Cash And Cash Equivalents",
+                "Cash Financial",
+            ],
+        ),
+        "Accounts Receivable": _historical_metric(
+            balance_sheet, ["Accounts Receivable", "Receivables"]
+        ),
+        "Inventory": _historical_metric(balance_sheet, ["Inventory"]),
+        "Current Assets": _historical_metric(balance_sheet, ["Current Assets"]),
+        "Total Assets": _historical_metric(balance_sheet, ["Total Assets"]),
+        "Accounts Payable": _historical_metric(
+            balance_sheet, ["Accounts Payable", "Payables And Accrued Expenses"]
+        ),
+        "Current Liabilities": _historical_metric(
+            balance_sheet, ["Current Liabilities"]
+        ),
+        "Long-Term Debt": _historical_metric(
+            balance_sheet,
+            [
+                "Long Term Debt And Capital Lease Obligation",
+                "Long Term Debt",
+                "Total Debt",
+            ],
+        ),
+        "Total Liabilities": _historical_metric(
+            balance_sheet, ["Total Liabilities Net Minority Interest", "Total Liabilities"]
+        ),
+        "Total Equity": _historical_metric(
+            balance_sheet,
+            ["Stockholders Equity", "Total Equity Gross Minority Interest", "Common Stock Equity"],
+        ),
+        "Operating Cash Flow": _historical_metric(
+            cash_flow_statement,
+            ["Total Cash From Operating Activities", "Operating Cash Flow"],
+        ),
+        "Capital Expenditure": _historical_metric(
+            cash_flow_statement, ["Capital Expenditure"]
+        ),
+    }
+
+    periods = sorted({period for series in metrics.values() for period in series})
+    if not periods or not metrics["Revenue"]:
+        return pd.DataFrame()
+
+    history = pd.DataFrame({"Period": periods})
+    for metric_name, values in metrics.items():
+        history[metric_name] = history["Period"].map(values)
+
+    # Cash-flow capex is commonly reported as a negative outflow by Yahoo.
+    history["Capital Expenditure"] = history["Capital Expenditure"].abs()
+    history["Free Cash Flow"] = (
+        history["Operating Cash Flow"] - history["Capital Expenditure"]
+    )
+    history["Net Debt"] = history["Long-Term Debt"] - history["Cash"]
+    history["Revenue Growth"] = history["Revenue"].pct_change()
+
+    for metric_name, numerator in (
+        ("Gross Margin", "Gross Profit"),
+        ("Operating Margin", "Operating Income"),
+        ("EBITDA Margin", "EBITDA"),
+        ("Net Margin", "Net Income"),
+        ("Free Cash Flow Margin", "Free Cash Flow"),
+    ):
+        history[metric_name] = history[numerator] / history["Revenue"]
+
+    return history
+
+
 def get_company_data(ticker: str) -> dict[str, Any]:
     """Retrieve company details and financial data."""
 
